@@ -19,13 +19,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
-
       - name: Build release APK
         run: |
           chmod +x gradlew
           set -o pipefail
-          ./gradlew --no-daemon --stacktrace assembleRelease 2>&1 | tee build.log
+          echo "ANDROID_HOME=$ANDROID_HOME" | tee build.log
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          ./gradlew --no-daemon --stacktrace assembleRelease 2>&1 | tee -a build.log
 
       - name: Name the APK
         run: cp app/build/outputs/apk/release/app-release.apk "AtlasForge-v1.0.${{ github.run_number }}.apk"
