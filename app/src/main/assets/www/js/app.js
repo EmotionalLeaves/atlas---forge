@@ -37,6 +37,10 @@ export async function boot() {
     setWorld(W);
     app.R.onLabels = drawLabels;
     window.addEventListener('resize', () => app.R.resize());
+    // Android may drop the GPU context while the app is in the background: save, then reload from the autosave
+    const glc = document.getElementById('gl');
+    glc.addEventListener('webglcontextlost', (e) => { e.preventDefault(); app.running = false; autosave(); });
+    glc.addEventListener('webglcontextrestored', () => { Promise.resolve(autosave()).finally(() => location.reload()); });
     setupInput(document.getElementById('map'));
     UI.init(app);
     loading.classList.add('done'); setTimeout(() => loading.remove(), 500);
