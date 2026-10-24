@@ -9,8 +9,15 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 input, select, textarea { font: inherit; color: var(--text); background: #0d121a; border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; width: 100%; user-select: text; -webkit-user-select: text; }
 select { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 16px) 55%, calc(100% - 11px) 55%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 28px; }
 #app { position: fixed; inset: 0; }
-#map { position: absolute; inset: 0; touch-action: none; }
+#map { position: absolute; inset: 0; touch-action: none; background: #13212f; overflow: hidden; z-index: 0; isolation: isolate; }
+.tiles { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+#tilesBase { z-index: 0; } #gl { z-index: 1; } #tilesLabels { z-index: 2; } #labels { z-index: 3; }
+.tile { position: absolute; left: 0; top: 0; opacity: 0; transition: opacity .25s; will-change: transform; user-select: none; -webkit-user-drag: none; max-width: none; }
+.tile.in { opacity: 1; }
+#attr { position: absolute; right: 6px; bottom: calc(var(--tabs) + 4px); z-index: 4; font-size: 9px; color: rgba(255,255,255,.75); background: rgba(10,14,20,.55); padding: 1px 5px; border-radius: 4px; pointer-events: none; max-width: 70vw; text-align: right; }
+#attr:empty { display: none; }
 #map canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#map #gl { position: absolute; }
 #labels { pointer-events: none; }
 
 #top { position: absolute; top: 0; left: 0; right: 0; padding: calc(8px + env(safe-area-inset-top)) 10px 8px; display: flex; gap: 8px; align-items: center; pointer-events: none;

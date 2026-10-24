@@ -9,14 +9,14 @@ const cellLng = (W, i) => -180 + ((i % W.Wd) + 0.5) * 360 / W.Wd;
 export function buildCatalog(app) {
   const W = app.W, D = W.D, U = D.units, C = D.cells, nat = W.nations;
   const T = [];
-  const add = (t) => { if (t.group === 'Real world (2026 data)' || ['p_name','p_pop','p_area','p_dens','p_country','p_type','p_region','k_name','k_pop','k_dens','k_area','k_state','k_min','k_blk','k_his','terrain','climate','rivers','lat','lng'].includes(t.id)) t.static = true; T.push(t); return t; };
+  const add = (t) => { if (t.groupBy === 'country' && !t.by) t.by = 'country'; if (t.group === 'Real world (2026 data)' || ['p_name','p_pop','p_area','p_dens','p_country','p_type','p_region','k_name','k_pop','k_dens','k_area','k_state','k_min','k_blk','k_his','terrain','climate','rivers','lat','lng'].includes(t.id)) t.static = true; T.push(t); return t; };
   const nationCat = { kind: 'cat', catColor: (c) => nat[c] ? nat[c].color : [178, 186, 198], catLabel: (c) => nat[c] ? nat[c].name : 'Unclaimed' };
   const cc = (i) => U.countries[C.country[i] - 1];
   const strCat = (getter) => { const map = new Map(), labels = []; return { kind: 'cat', value: (i) => { const s = getter(i); if (s == null || s === '') return 0; let k = map.get(s); if (!k) { k = labels.length + 1; map.set(s, k); labels.push(s); } return k; }, catLabel: (k) => labels[k - 1] || '—', catColor: (k) => catColor(k * 3 + 1) }; };
 
   // ---------- grid cells: simulation ----------
   const G = 'Simulation';
-  add({ id: 'nations', layer: 'cells', group: G, label: 'Nations', value: (i) => W.owner[i], ...nationCat, desc: 'Who controls each cell right now' });
+  add({ id: 'nations', layer: 'cells', group: G, label: 'Nations', by: 'owner', value: (i) => W.owner[i], ...nationCat, desc: 'Who controls each cell right now' });
   add({ id: 'pop', layer: 'cells', group: G, label: 'Population', kind: 'num', ramp: 'inferno', log: true, value: (i) => W.pop[i], fmt });
   add({ id: 'density', layer: 'cells', group: G, label: 'Population density (/km²)', kind: 'num', ramp: 'inferno', log: true, value: (i) => W.pop[i] / W.area[(i / W.Wd) | 0], fmt });
   add({ id: 'growth', layer: 'cells', group: G, label: 'Population change since 2026', kind: 'div', ramp: 'diverge', value: (i) => W.pop0[i] > 0 ? Math.log2(W.pop[i] / W.pop0[i]) : 0, fmt: (v) => (v >= 0 ? '+' : '') + Math.round((Math.pow(2, v) - 1) * 100) + '%', symmetric: true });
@@ -32,23 +32,23 @@ export function buildCatalog(app) {
   // ---------- grid cells: nation-level ----------
   const N = 'Nations';
   const nv = (f) => (i) => { const n = nat[W.owner[i]]; return n ? f(n) : NaN; };
-  add({ id: 'n_pop', layer: 'cells', group: N, label: 'Nation population', kind: 'num', ramp: 'inferno', log: true, value: nv((n) => n.pop), fmt });
-  add({ id: 'n_gdp', layer: 'cells', group: N, label: 'Nation GDP', kind: 'num', ramp: 'ember', log: true, value: nv((n) => n.gdp * 1e6), fmt: (v) => '$' + fmt(v) });
-  add({ id: 'n_gdppc', layer: 'cells', group: N, label: 'GDP per capita', kind: 'num', ramp: 'ember', log: true, value: nv((n) => n.pop ? n.gdp * 1e6 / n.pop : NaN), fmt: (v) => '$' + fmt(v) });
-  add({ id: 'n_mil', layer: 'cells', group: N, label: 'Military strength', kind: 'num', ramp: 'blues', log: true, value: nv((n) => n.mil), fmt });
-  add({ id: 'n_stab', layer: 'cells', group: N, label: 'Stability', kind: 'num', ramp: 'stability', value: nv((n) => n.stab), fmt: (v) => pct(v), domain: [0, 1] });
-  add({ id: 'n_exh', layer: 'cells', group: N, label: 'War exhaustion', kind: 'num', ramp: 'inferno', value: nv((n) => n.exh), fmt: (v) => pct(v), domain: [0, 1] });
-  add({ id: 'n_gov', layer: 'cells', group: N, label: 'Government', kind: 'cat', value: nv((n) => 1 + ['Republic', 'Monarchy', 'Autocracy', 'Junta', 'Provisional'].indexOf(n.gov)), catColor: (c) => [[0, 0, 0], [80, 150, 220], [200, 160, 60], [170, 60, 70], [90, 100, 60], [200, 120, 200]][c] || [60, 60, 60], catLabel: (c) => ['', 'Republic', 'Monarchy', 'Autocracy', 'Military junta', 'Provisional government'][c] });
-  add({ id: 'n_war', layer: 'cells', group: N, label: 'At war', kind: 'cat', value: (i) => { const o = W.owner[i]; if (!o) return 0; return W.wars.some((w) => w.a === o || w.b === o) ? 2 : 1; }, catColor: (c) => [[60, 60, 60], [90, 120, 100], [225, 60, 50]][c], catLabel: (c) => ['Unclaimed', 'At peace', 'At war'][c] });
-  add({ id: 'n_bloc', layer: 'cells', group: N, label: 'Alliances', kind: 'cat', value: nv((n) => n.bloc || 0), catColor: (c) => c && W.blocs[c] ? W.blocs[c].color : [95, 98, 104], catLabel: (c) => c && W.blocs[c] ? W.blocs[c].name : 'Unaligned' });
-  add({ id: 'n_ruling', layer: 'cells', group: N, label: 'Ruling party', kind: 'cat', value: nv((n) => n.gov === 'Republic' ? n.ruling + 1 : 4), catColor: (c) => PARTY_COLORS[c - 1] || [90, 90, 96], catLabel: (c) => ['', 'Left party governs', 'Centre party governs', 'Right party governs', 'No elections'][c] });
-  add({ id: 'n_size', layer: 'cells', group: N, label: 'Territory size', kind: 'num', ramp: 'viridis', log: true, value: nv((n) => n.cells), fmt: (v) => fmt(v) + ' cells' });
-  add({ id: 'n_age', layer: 'cells', group: N, label: 'Nation age', kind: 'num', ramp: 'viridis', value: nv((n) => (W.month - n.founded) / 12), fmt: (v) => v.toFixed(0) + ' yr' });
+  add({ id: 'n_pop', by: 'owner', layer: 'cells', group: N, label: 'Nation population', kind: 'num', ramp: 'inferno', log: true, value: nv((n) => n.pop), fmt });
+  add({ id: 'n_gdp', by: 'owner', layer: 'cells', group: N, label: 'Nation GDP', kind: 'num', ramp: 'ember', log: true, value: nv((n) => n.gdp * 1e6), fmt: (v) => '$' + fmt(v) });
+  add({ id: 'n_gdppc', by: 'owner', layer: 'cells', group: N, label: 'GDP per capita', kind: 'num', ramp: 'ember', log: true, value: nv((n) => n.pop ? n.gdp * 1e6 / n.pop : NaN), fmt: (v) => '$' + fmt(v) });
+  add({ id: 'n_mil', by: 'owner', layer: 'cells', group: N, label: 'Military strength', kind: 'num', ramp: 'blues', log: true, value: nv((n) => n.mil), fmt });
+  add({ id: 'n_stab', by: 'owner', layer: 'cells', group: N, label: 'Stability', kind: 'num', ramp: 'stability', value: nv((n) => n.stab), fmt: (v) => pct(v), domain: [0, 1] });
+  add({ id: 'n_exh', by: 'owner', layer: 'cells', group: N, label: 'War exhaustion', kind: 'num', ramp: 'inferno', value: nv((n) => n.exh), fmt: (v) => pct(v), domain: [0, 1] });
+  add({ id: 'n_gov', by: 'owner', layer: 'cells', group: N, label: 'Government', kind: 'cat', value: nv((n) => 1 + ['Republic', 'Monarchy', 'Autocracy', 'Junta', 'Provisional'].indexOf(n.gov)), catColor: (c) => [[0, 0, 0], [80, 150, 220], [200, 160, 60], [170, 60, 70], [90, 100, 60], [200, 120, 200]][c] || [60, 60, 60], catLabel: (c) => ['', 'Republic', 'Monarchy', 'Autocracy', 'Military junta', 'Provisional government'][c] });
+  add({ id: 'n_war', by: 'owner', layer: 'cells', group: N, label: 'At war', kind: 'cat', value: (i) => { const o = W.owner[i]; if (!o) return 0; return W.wars.some((w) => w.a === o || w.b === o) ? 2 : 1; }, catColor: (c) => [[60, 60, 60], [90, 120, 100], [225, 60, 50]][c], catLabel: (c) => ['Unclaimed', 'At peace', 'At war'][c] });
+  add({ id: 'n_bloc', by: 'owner', layer: 'cells', group: N, label: 'Alliances', kind: 'cat', value: nv((n) => n.bloc || 0), catColor: (c) => c && W.blocs[c] ? W.blocs[c].color : [95, 98, 104], catLabel: (c) => c && W.blocs[c] ? W.blocs[c].name : 'Unaligned' });
+  add({ id: 'n_ruling', by: 'owner', layer: 'cells', group: N, label: 'Ruling party', kind: 'cat', value: nv((n) => n.gov === 'Republic' ? n.ruling + 1 : 4), catColor: (c) => PARTY_COLORS[c - 1] || [90, 90, 96], catLabel: (c) => ['', 'Left party governs', 'Centre party governs', 'Right party governs', 'No elections'][c] });
+  add({ id: 'n_size', by: 'owner', layer: 'cells', group: N, label: 'Territory size', kind: 'num', ramp: 'viridis', log: true, value: nv((n) => n.cells), fmt: (v) => fmt(v) + ' cells' });
+  add({ id: 'n_age', by: 'owner', layer: 'cells', group: N, label: 'Nation age', kind: 'num', ramp: 'viridis', value: nv((n) => (W.month - n.founded) / 12), fmt: (v) => v.toFixed(0) + ' yr' });
   add({ id: 'n_capdist', layer: 'cells', group: N, label: 'Distance to capital', kind: 'num', ramp: 'viridis', value: (i) => { const n = nat[W.owner[i]]; if (!n || n.capital < 0) return NaN; const a = n.capital; const dx = Math.abs((a % W.Wd) - (i % W.Wd)); return Math.hypot(Math.min(dx, W.Wd - dx) * Math.cos(cellLat(W, i) * Math.PI / 180), ((a / W.Wd) | 0) - ((i / W.Wd) | 0)) * 27.8; }, fmt: (v) => fmt(v) + ' km' });
   // relations with each living nation
   for (const n of nat) {
     if (!n || !n.alive) continue;
-    add({ id: 'rel_' + n.id, layer: 'cells', group: 'Relations', label: `Relations with ${n.name}`, kind: 'div', ramp: 'diverge', domain: [-100, 100], value: (i) => { const o = W.owner[i]; return !o ? NaN : o === n.id ? 100 : rel(W, n.id, o); }, fmt: (v) => Math.round(v), hidden: true, search: n.name });
+    add({ id: 'rel_' + n.id, by: 'owner', layer: 'cells', group: 'Relations', label: `Relations with ${n.name}`, kind: 'div', ramp: 'diverge', domain: [-100, 100], value: (i) => { const o = W.owner[i]; return !o ? NaN : o === n.id ? 100 : rel(W, n.id, o); }, fmt: (v) => Math.round(v), hidden: true, search: n.name });
   }
 
   // ---------- grid cells: real-world 2026 data ----------

@@ -13,7 +13,7 @@ void main(){ vec2 p=(a_pos+vec2(u_off,0.0)-u_center)*u_scale; gl_Position=vec4(p
 const RASTER_FS = `
 precision highp float;
 uniform sampler2D u_color; uniform sampler2D u_group; uniform vec2 u_size; uniform float u_scale;
-uniform float u_grid; uniform float u_bpx; uniform float u_dpx; uniform vec3 u_bcol; uniform float u_dim;
+uniform float u_grid; uniform float u_bpx; uniform float u_dpx; uniform vec3 u_bcol; uniform float u_dim; uniform float u_op;
 varying highp vec2 v_tex;
 vec4 G(vec2 c){ c.x=mod(c.x,u_size.x); c.y=clamp(c.y,0.0,u_size.y-1.0); return texture2D(u_group,(c+0.5)/u_size); }
 float diff2(vec2 a, vec2 b){ return step(0.002, abs(a.x-b.x)+abs(a.y-b.y)); }
@@ -32,7 +32,7 @@ void main(){
   c=mix(c,vec3(1.0),db*0.92);
   c=mix(c,u_bcol,nb*0.9);
   c=mix(c,vec3(0.11,0.13,0.17),u_dim);
-  gl_FragColor=vec4(c,1.0);
+  gl_FragColor=vec4(c*u_op,u_op);
 }`;
 const POLY_VS = `
 attribute vec2 a_pos; attribute vec4 a_col;
@@ -45,6 +45,12 @@ attribute vec2 a_pos;
 uniform vec2 u_center; uniform float u_scale; uniform vec2 u_view; uniform float u_off; uniform vec2 u_shift;
 void main(){ vec2 p=(a_pos+vec2(u_off,0.0)-u_center)*u_scale+u_shift; gl_Position=vec4(p.x*2.0/u_view.x,-p.y*2.0/u_view.y,0.0,1.0); }`;
 const LINE_FS = `precision mediump float; uniform vec4 u_color; void main(){ gl_FragColor=vec4(u_color.rgb*u_color.a,u_color.a); }`;
+const LINEC_VS = `
+attribute vec2 a_pos; attribute vec4 a_col;
+uniform vec2 u_center; uniform float u_scale; uniform vec2 u_view; uniform float u_off; uniform vec2 u_shift;
+varying vec4 v_col;
+void main(){ vec2 p=(a_pos+vec2(u_off,0.0)-u_center)*u_scale+u_shift; gl_Position=vec4(p.x*2.0/u_view.x,-p.y*2.0/u_view.y,0.0,1.0); v_col=a_col; }`;
+const LINEC_FS = `precision mediump float; varying vec4 v_col; uniform float u_alpha; void main(){ float a=v_col.a*u_alpha; gl_FragColor=vec4(v_col.rgb*a,a); }`;
 const PT_VS = `
 attribute vec2 a_pos; attribute float a_size; attribute vec4 a_col;
 uniform vec2 u_center; uniform float u_scale; uniform vec2 u_view; uniform float u_off; uniform float u_ps;
@@ -65,17 +71,17 @@ function compile(gl, vs, fs) {
 export class MapRenderer {
   constructor(canvas, labelCanvas, gridW, gridH) {
     this.canvas = canvas; this.lc = labelCanvas; this.ctx = labelCanvas.getContext('2d');
-    const gl = canvas.getContext('webgl', { antialias: true, alpha: false, premultipliedAlpha: true, preserveDrawingBuffer: false });
+    const gl = canvas.getContext('webgl', { antialias: true, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: false, stencil: true });
     if (!gl) throw new Error('WebGL is not available on this device');
     this.gl = gl;
     if (!gl.getExtension('OES_element_index_uint')) throw new Error('Device GPU lacks 32-bit index support');
     const hp = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
     const fs = hp && hp.precision > 0 ? RASTER_FS : RASTER_FS.replace('precision highp float;', 'precision mediump float;');
-    this.prog = { raster: compile(gl, RASTER_VS, fs), poly: compile(gl, POLY_VS, POLY_FS), line: compile(gl, LINE_VS, LINE_FS), pt: compile(gl, PT_VS, PT_FS) };
+    this.prog = { raster: compile(gl, RASTER_VS, fs), poly: compile(gl, POLY_VS, POLY_FS), line: compile(gl, LINE_VS, LINE_FS), lineC: compile(gl, LINEC_VS, LINEC_FS), pt: compile(gl, PT_VS, PT_FS) };
     this.gw = gridW; this.gh = gridH;
     this.cam = { x: 0.53, y: 0.4, s: 1 }; // s = device px per world unit
     this.dpr = Math.min(window.devicePixelRatio || 1, 3);
-    this.opts = { grid: true, borderColor: [0.06, 0.07, 0.09], borderPx: 1.6, distPx: 1.6, dim: 0 };
+    this.opts = { grid: true, borderColor: [0.06, 0.07, 0.09], borderPx: 1.6, distPx: 1.6, dim: 0, opacity: 1 };
     this.polys = {}; this.lines = {}; this.points = null; this.highlight = null;
     this.onLabels = null; this._dirty = true;
     this._buildRasterMesh();
@@ -113,18 +119,35 @@ export class MapRenderer {
   setCellGroups(rgba) { const gl = this.gl; gl.bindTexture(gl.TEXTURE_2D, this.texGroup); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gw, this.gh, gl.RGBA, gl.UNSIGNED_BYTE, rgba); this.dirty(); }
 
   // geom: {pos Float32Array, uid Uint16Array, idx Uint32Array, lpos Float32Array, luid Uint16Array}
-  addPolyLayer(name, geom) {
-    const gl = this.gl; const L = { geom, visible: false, alpha: 0.9, lineColor: [0.05, 0.05, 0.08, 0.55] };
-    L.pos = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, L.pos); gl.bufferData(gl.ARRAY_BUFFER, geom.pos, gl.STATIC_DRAW);
+  // share: reuse another layer's geometry buffers (same shapes, different colours). lineColors: per-unit outline colours.
+  addPolyLayer(name, geom, { share = null, lineColors = false } = {}) {
+    const gl = this.gl; const L = { geom, visible: false, alpha: 0.9, lineColor: [0.05, 0.05, 0.08, 0.55], lineAlpha: 1 };
+    const S = share ? this.polys[share] : null;
+    if (S) { L.pos = S.pos; L.idx = S.idx; L.lbuf = S.lbuf; L.n = S.n; L.ln = S.ln; }
+    else {
+      L.pos = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, L.pos); gl.bufferData(gl.ARRAY_BUFFER, geom.pos, gl.STATIC_DRAW);
+      L.idx = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, L.idx); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geom.idx, gl.STATIC_DRAW); L.n = geom.idx.length;
+      L.lbuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, L.lbuf); gl.bufferData(gl.ARRAY_BUFFER, geom.lpos, gl.STATIC_DRAW); L.ln = geom.lpos.length / 2;
+    }
     L.col = gl.createBuffer(); L.colData = new Uint8Array(geom.uid.length * 4); gl.bindBuffer(gl.ARRAY_BUFFER, L.col); gl.bufferData(gl.ARRAY_BUFFER, L.colData, gl.DYNAMIC_DRAW);
-    L.idx = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, L.idx); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geom.idx, gl.STATIC_DRAW); L.n = geom.idx.length;
-    L.lbuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, L.lbuf); gl.bufferData(gl.ARRAY_BUFFER, geom.lpos, gl.STATIC_DRAW); L.ln = geom.lpos.length / 2;
+    if (lineColors) { L.lcol = gl.createBuffer(); L.lcolData = new Uint8Array(geom.luid.length * 4); gl.bindBuffer(gl.ARRAY_BUFFER, L.lcol); gl.bufferData(gl.ARRAY_BUFFER, L.lcolData, gl.DYNAMIC_DRAW); }
     this.polys[name] = L; return L;
   }
-  setPolyColors(name, unitRGBA) { // unitRGBA: Uint8Array(4*units)
-    const L = this.polys[name], uid = L.geom.uid, c = L.colData;
+  setPolyColors(name, unitRGBA, lineRGBA) { // Uint8Array(4*units) each
+    const L = this.polys[name], uid = L.geom.uid, c = L.colData, gl = this.gl;
     for (let i = 0; i < uid.length; i++) { const u = uid[i] * 4, o = i * 4; c[o] = unitRGBA[u]; c[o + 1] = unitRGBA[u + 1]; c[o + 2] = unitRGBA[u + 2]; c[o + 3] = unitRGBA[u + 3]; }
-    const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, L.col); gl.bufferSubData(gl.ARRAY_BUFFER, 0, c); this.dirty();
+    gl.bindBuffer(gl.ARRAY_BUFFER, L.col); gl.bufferSubData(gl.ARRAY_BUFFER, 0, c);
+    if (lineRGBA && L.lcol) {
+      const lu = L.geom.luid, lc = L.lcolData;
+      for (let i = 0; i < lu.length; i++) { const u = lu[i] * 4, o = i * 4; lc[o] = lineRGBA[u]; lc[o + 1] = lineRGBA[u + 1]; lc[o + 2] = lineRGBA[u + 2]; lc[o + 3] = lineRGBA[u + 3]; }
+      gl.bindBuffer(gl.ARRAY_BUFFER, L.lcol); gl.bufferSubData(gl.ARRAY_BUFFER, 0, lc);
+    }
+    this.dirty();
+  }
+  // Clip the cell grid to real land: fill = land polygons layer name, lakes = {pos, idx} cut back out.
+  setLandMask(landLayer, lakes) {
+    const gl = this.gl, mk = (d, t) => { const b = gl.createBuffer(); gl.bindBuffer(t, b); gl.bufferData(t, d, gl.STATIC_DRAW); return b; };
+    this.mask = { land: landLayer, lakePos: mk(lakes.pos, gl.ARRAY_BUFFER), lakeIdx: mk(lakes.idx, gl.ELEMENT_ARRAY_BUFFER), lakeN: lakes.idx.length };
   }
   addLineLayer(name, lpos, color, minS = 0) {
     const gl = this.gl; const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, lpos, gl.STATIC_DRAW);
@@ -193,12 +216,29 @@ export class MapRenderer {
   draw() {
     const gl = this.gl, c = this.cam;
     gl.viewport(0, 0, this.vw, this.vh);
-    gl.clearColor(0.075, 0.13, 0.2, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    if (this.onFrame) this.onFrame(this);
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     const left = c.x - this.vw / 2 / c.s, right = c.x + this.vw / 2 / c.s;
     const offs = []; for (let k = Math.floor(left); k <= Math.floor(right) && offs.length < 4; k++) offs.push(k);
+    // land mask into the stencil buffer (smooth real coastlines for the cell grid)
+    let P;
+    const M = this.mask && this.opts.clip !== false ? this.mask : null;
+    if (M) {
+      const land = this.polys[M.land];
+      gl.enable(gl.STENCIL_TEST); gl.clearStencil(0); gl.clear(gl.STENCIL_BUFFER_BIT);
+      gl.colorMask(false, false, false, false);
+      P = this.prog.poly; gl.useProgram(P.p); this._disableAttrs(); gl.vertexAttrib4f(P.a.a_col, 0, 0, 0, 1); gl.uniform1f(P.u.u_alpha, 1);
+      gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+      gl.stencilFunc(gl.ALWAYS, 1, 0xff); this._attr(P, 'a_pos', land.pos, 2); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, land.idx);
+      for (const o of offs) { this._common(P, o); gl.drawElements(gl.TRIANGLES, land.n, gl.UNSIGNED_INT, 0); }
+      gl.stencilFunc(gl.ALWAYS, 0, 0xff); this._attr(P, 'a_pos', M.lakePos, 2); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, M.lakeIdx);
+      for (const o of offs) { this._common(P, o); gl.drawElements(gl.TRIANGLES, M.lakeN, gl.UNSIGNED_INT, 0); }
+      gl.colorMask(true, true, true, true); gl.stencilFunc(gl.EQUAL, 1, 0xff); gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+      this._disableAttrs();
+    }
     // raster
-    let P = this.prog.raster; gl.useProgram(P.p); this._disableAttrs();
+    P = this.prog.raster; gl.useProgram(P.p); this._disableAttrs();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.rasterBuf);
     gl.enableVertexAttribArray(P.a.a_pos); gl.vertexAttribPointer(P.a.a_pos, 2, gl.FLOAT, false, 16, 0);
     gl.enableVertexAttribArray(P.a.a_tex); gl.vertexAttribPointer(P.a.a_tex, 2, gl.FLOAT, false, 16, 8);
@@ -208,20 +248,27 @@ export class MapRenderer {
     const cellPx = c.s / this.gw;
     gl.uniform1f(P.u.u_grid, this.opts.grid ? Math.max(0, Math.min(1, (cellPx - 10) / 14)) : 0);
     gl.uniform1f(P.u.u_bpx, this.opts.borderPx * this.dpr); gl.uniform1f(P.u.u_dpx, this.opts.distPx * this.dpr);
-    gl.uniform3fv(P.u.u_bcol, this.opts.borderColor); gl.uniform1f(P.u.u_dim, this.opts.dim);
+    gl.uniform3fv(P.u.u_bcol, this.opts.borderColor); gl.uniform1f(P.u.u_dim, this.opts.dim); gl.uniform1f(P.u.u_op, this.opts.opacity);
     for (const o of offs) { this._common(P, o); gl.drawArrays(gl.TRIANGLES, 0, this.rasterCount); }
     this._disableAttrs();
+    if (M) gl.disable(gl.STENCIL_TEST);
     // polygons
-    for (const L of Object.values(this.polys)) {
-      if (!L.visible) continue;
+    for (const L of (this.polyOrder || Object.keys(this.polys)).map((k) => this.polys[k])) {
+      if (!L || !L.visible) continue;
       P = this.prog.poly; gl.useProgram(P.p);
       this._attr(P, 'a_pos', L.pos, 2); this._attr(P, 'a_col', L.col, 4, gl.UNSIGNED_BYTE, true);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, L.idx); gl.uniform1f(P.u.u_alpha, L.alpha);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, L.idx); gl.uniform1f(P.u.u_alpha, L.alpha * this.opts.opacity);
       for (const o of offs) { this._common(P, o); gl.drawElements(gl.TRIANGLES, L.n, gl.UNSIGNED_INT, 0); }
       this._disableAttrs();
-      P = this.prog.line; gl.useProgram(P.p); this._attr(P, 'a_pos', L.lbuf, 2);
-      const a = L.lineColor[3] * Math.max(0.15, Math.min(1, (c.s / this.dpr - 700) / 2500));
-      gl.uniform4f(P.u.u_color, L.lineColor[0], L.lineColor[1], L.lineColor[2], a);
+      const fade = Math.max(0.15, Math.min(1, (c.s / this.dpr - 700) / 2500));
+      if (L.lcol) {
+        P = this.prog.lineC; gl.useProgram(P.p); this._attr(P, 'a_pos', L.lbuf, 2); this._attr(P, 'a_col', L.lcol, 4, gl.UNSIGNED_BYTE, true);
+        gl.uniform1f(P.u.u_alpha, L.lineAlpha * Math.max(0.5, fade));
+      } else {
+        if (!L.lineColor[3]) continue;
+        P = this.prog.line; gl.useProgram(P.p); this._attr(P, 'a_pos', L.lbuf, 2);
+        gl.uniform4f(P.u.u_color, L.lineColor[0], L.lineColor[1], L.lineColor[2], L.lineColor[3] * fade);
+      }
       for (const o of offs) { this._common(P, o); gl.drawArrays(gl.LINES, 0, L.ln); }
       this._disableAttrs();
     }

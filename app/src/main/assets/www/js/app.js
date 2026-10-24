@@ -8,12 +8,25 @@ import { planStats, paintUnits, brushCells, floodUnits, eligible, districtVotes 
 import { getSlot, putSlot, serialize, deserialize } from './store.js';
 import { TERRAIN_COLORS, clamp, h, hsl } from './util.js';
 import * as UI from './panels.js';
+import { Basemap, BASEMAPS } from './basemap.js';
 
 export const app = {
   mode: 'explore', themeId: 'nations', running: false, speed: 1, show: { borders: true, cities: true, labels: true, grid: true },
   tool: 'pan', district: 0, brush: 2, paintNation: 0, dataAttr: 'dev', dataValue: 0.5, disaster: 'quake', editTool: 'borders',
   sel: null, undo: [], redo: [], aggStamp: 0,
+  settings: { basemap: 'streets', opacity: 0.72, mapLabels: true },
 };
+try { Object.assign(app.settings, JSON.parse(localStorage.getItem('af_settings') || '{}')); } catch {}
+export function saveSettings() { try { localStorage.setItem('af_settings', JSON.stringify(app.settings)); } catch {} }
+// Apply the basemap choice: real map tiles below (and place names above) the data overlay.
+export function applyMapStyle() {
+  const B = app.basemap, st = app.settings; if (!B) return;
+  B.setStyle(st.basemap); B.showLabels = st.mapLabels;
+  app.R.opts.opacity = B.online ? st.opacity : 1;
+  app.R.opts.grid = app.show.grid && !B.online;
+  if (app.R.points) app.R.points.visible = app.show.cities && !B.hasLabels;
+  app.R.dirty();
+}
 window.app = app;
 
 // ---------------------------------------------------------------- boot
@@ -27,7 +40,12 @@ export async function boot() {
     app.R = new MapRenderer(document.getElementById('gl'), document.getElementById('labels'), W0, H0);
     app.cellRGBA = new Uint8Array(W0 * H0 * 4); app.groupRGBA = new Uint8Array(W0 * H0 * 4); app.baseRGBA = new Uint8Array(W0 * H0 * 4);
     app.R.addPolyLayer('provinces', D.geom.prov); app.R.addPolyLayer('counties', D.geom.county);
+    app.R.addPolyLayer('countryFill', D.geom.country, { lineColors: true });
+    app.R.addPolyLayer('nationProv', D.geom.prov, { share: 'provinces', lineColors: true });
+    app.R.polyOrder = ['countryFill', 'nationProv', 'provinces', 'counties'];
+    app.R.setLandMask('countryFill', D.geom.lakes);
     app.unitRGBA = { provinces: new Uint8Array(D.units.provinces.length * 4), counties: new Uint8Array(D.units.counties.length * 4) };
+    prepareSmooth(D, W0, H0);
     app.R.addLineLayer('countries', D.geom.country.lpos, [0.92, 0.94, 1, 0.22], 0);
     setupCities();
     progress('Building the world…', 0.85);
@@ -36,6 +54,10 @@ export async function boot() {
     if (!W) W = createWorld(D, {});
     setWorld(W);
     app.R.onLabels = drawLabels;
+    app.basemap = new Basemap(document.getElementById('tilesBase'), document.getElementById('tilesLabels'), document.getElementById('attr'));
+    app.basemap.onOffline = () => { UI.toast("Can't reach the online map right now — showing the built-in map", 4000); app.basemap.setStyle('none'); app.R.opts.opacity = 1; app.R.opts.grid = app.show.grid; if (app.R.points) app.R.points.visible = app.show.cities; app.R.dirty(); };
+    app.R.onFrame = (R) => app.basemap.update(R);
+    applyMapStyle();
     window.addEventListener('resize', () => app.R.resize());
     // Android may drop the GPU context while the app is in the background: save, then reload from the autosave
     const glc = document.getElementById('gl');
@@ -111,7 +133,9 @@ function refreshInner() {
     app.cellLegend = null;
   }
   app.cellColorOne = t.layer === 'cells' && !poly ? app.legend.colorOne : null;
+  app.smooth = !poly && !(p && p.unit === 'cells') && t.layer === 'cells' ? (t.by || null) : null;
   composeCells(land);
+  applySmooth();
   // ---- polygon layers
   for (const L of ['provinces', 'counties']) app.R.polys[L].visible = poly === L;
   if (poly) {
@@ -123,7 +147,7 @@ function refreshInner() {
     app.R.setPolyColors(poly, arr);
     app.R.polys[poly].alpha = 0.93;
   }
-  app.R.opts.grid = app.show.grid;
+  app.R.opts.grid = app.show.grid && !(app.basemap && app.basemap.online);
   app.R.lines.countries.visible = app.show.borders;
   app.R.setCellColors(out); app.R.setCellGroups(grp);
   updateHighlight();
@@ -148,6 +172,109 @@ function composeCells(list) {
     out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = 255;
     const gv = gkey[i]; grp[o] = gv & 255; grp[o + 1] = gv >> 8;
   }
+  // coastal water cells take a land neighbour's colour so the coastline-clipped grid has no gaps
+  const F = app.fringe;
+  if (F) {
+    if (list.length === W.land.length) { for (let k = 0; k < F.cell.length; k++) copyCell(F.src[k], F.cell[k]); }
+    else for (const i of list) { const fl = F.bySrc.get(i); if (fl) for (const f of fl) copyCell(i, f); }
+  }
+}
+function copyCell(from, to) {
+  const a = from * 4, b = to * 4, out = app.cellRGBA, grp = app.groupRGBA;
+  out[b] = out[a]; out[b + 1] = out[a + 1]; out[b + 2] = out[a + 2]; out[b + 3] = out[a + 3];
+  grp[b] = grp[a]; grp[b + 1] = grp[a + 1]; grp[b + 2] = grp[a + 2]; grp[b + 3] = grp[a + 3];
+}
+
+// ---- real-shape rendering: nation themes drawn as province polygons, country themes as country polygons
+function prepareSmooth(D, Wd, Hd) {
+  const country = D.cells.country, N = Wd * Hd;
+  // coastal fringe: water cells within 2 cells of land, each linked to its nearest land cell
+  const src = new Int32Array(N).fill(-1); let frontier = [];
+  for (let i = 0; i < N; i++) if (country[i]) src[i] = i;
+  for (let i = 0; i < N; i++) if (country[i]) frontier.push(i);
+  const cells = [], srcs = [];
+  for (let ring = 0; ring < 2; ring++) {
+    const next = [];
+    for (const i of frontier) {
+      const x = i % Wd, y = (i / Wd) | 0;
+      for (const j of [y * Wd + (x + 1) % Wd, y * Wd + (x - 1 + Wd) % Wd, y > 0 ? i - Wd : -1, y < Hd - 1 ? i + Wd : -1]) {
+        if (j < 0 || src[j] >= 0) continue; src[j] = src[i]; cells.push(j); srcs.push(src[i]); next.push(j);
+      }
+    }
+    frontier = next;
+  }
+  const bySrc = new Map(); cells.forEach((c, k) => { const s0 = srcs[k]; let a = bySrc.get(s0); if (!a) bySrc.set(s0, a = []); a.push(c); });
+  app.fringe = { cell: Int32Array.from(cells), src: Int32Array.from(srcs), bySrc };
+  // cells of each province (CSR) for quick purity checks
+  const nP = D.units.provinces.length + 1, admin = D.cells.admin1, cnt = new Int32Array(nP + 1);
+  for (let i = 0; i < N; i++) if (country[i] && admin[i]) cnt[admin[i] + 1]++;
+  for (let k = 1; k <= nP; k++) cnt[k] += cnt[k - 1];
+  const items = new Int32Array(cnt[nP]), fill = cnt.slice();
+  for (let i = 0; i < N; i++) if (country[i] && admin[i]) items[fill[admin[i]]++] = i;
+  app.provCells = { start: cnt, items };
+  app.provPure = new Uint8Array(nP);
+  app.polyRGBA = { nationProv: new Uint8Array(D.units.provinces.length * 4), nationProvLine: new Uint8Array(D.units.provinces.length * 4), countryFill: new Uint8Array((D.units.countries.length + 1) * 4), countryLine: new Uint8Array((D.units.countries.length + 1) * 4) };
+  // a land cell inside each tiny province / country that has no cells of its own
+  app.provProbe = D.units.provinces.map((p) => cellAt({ Wd, Hd }, p.l[0] ?? 0, p.l[1] ?? 0));
+}
+const darken = (a, o, src, f) => { a[o] = src[0] * f; a[o + 1] = src[1] * f; a[o + 2] = src[2] * f; };
+function applySmooth() {
+  const W = app.W, R = app.R, out = app.cellRGBA, mode = app.smooth;
+  R.polys.nationProv.visible = mode === 'owner'; R.polys.countryFill.visible = mode === 'country';
+  if (!mode) return;
+  const D = W.D, base = app.baseRGBA;
+  if (mode === 'owner') {
+    const { start, items } = app.provCells, nP = D.units.provinces.length, fillA = app.polyRGBA.nationProv, lineA = app.polyRGBA.nationProvLine;
+    const ownerColor = new Map();
+    for (let p = 1; p <= nP; p++) {
+      const o4 = (p - 1) * 4; let pure = 1, own = -1, first = -1;
+      for (let k = start[p]; k < start[p + 1]; k++) { const i = items[k], ow = W.owner[i]; if (own < 0) { own = ow; first = i; } else if (ow !== own) { pure = 0; break; } }
+      if (first < 0) { // tiny province without cells: colour by whoever holds the land it sits on
+        const pr = app.provProbe[p - 1], ow = pr >= 0 && D.cells.country[pr] ? W.owner[pr] : D.units.provinces[p - 1].c;
+        const col = ownerColor.get(ow); if (!col || !ow || !W.nations[ow] || !W.nations[ow].alive) { fillA[o4 + 3] = 0; lineA[o4 + 3] = 0; app.provPure[p] = 0; continue; }
+        fillA[o4] = col[0]; fillA[o4 + 1] = col[1]; fillA[o4 + 2] = col[2]; fillA[o4 + 3] = 255; darken(lineA, o4, col, 0.55); lineA[o4 + 3] = 150; app.provPure[p] = 1; continue;
+      }
+      app.provPure[p] = pure;
+      const b = first * 4, col = [base[b], base[b + 1], base[b + 2]];
+      if (!ownerColor.has(own)) ownerColor.set(own, col);
+      if (pure) {
+        fillA[o4] = col[0]; fillA[o4 + 1] = col[1]; fillA[o4 + 2] = col[2]; fillA[o4 + 3] = 255; darken(lineA, o4, col, 0.55); lineA[o4 + 3] = 150;
+        for (let k = start[p]; k < start[p + 1]; k++) out[items[k] * 4 + 3] = 0;
+      } else { fillA[o4 + 3] = 0; lineA[o4] = lineA[o4 + 1] = lineA[o4 + 2] = 20; lineA[o4 + 3] = 70; }
+    }
+    // second pass for cell-less provinces that came before their owner's first province
+    for (let p = 1; p <= nP; p++) {
+      if (start[p] !== start[p + 1]) continue; const o4 = (p - 1) * 4; if (fillA[o4 + 3]) continue;
+      const pr = app.provProbe[p - 1], ow = pr >= 0 && D.cells.country[pr] ? W.owner[pr] : D.units.provinces[p - 1].c, col = ownerColor.get(ow);
+      if (col && ow && W.nations[ow] && W.nations[ow].alive) { fillA[o4] = col[0]; fillA[o4 + 1] = col[1]; fillA[o4 + 2] = col[2]; fillA[o4 + 3] = 255; darken(lineA, o4, col, 0.55); lineA[o4 + 3] = 150; }
+    }
+    // pure-province cells in the coastal fringe must hide too
+    const F = app.fringe; for (let k = 0; k < F.cell.length; k++) if (out[F.src[k] * 4 + 3] === 0) out[F.cell[k] * 4 + 3] = 0;
+    R.setPolyColors('nationProv', fillA, lineA); R.polys.nationProv.alpha = 1; R.polys.nationProv.lineAlpha = 1;
+  } else {
+    const nC = D.units.countries.length, fillA = app.polyRGBA.countryFill, lineA = app.polyRGBA.countryLine, seen = new Uint8Array(nC + 1);
+    fillA.fill(0); lineA.fill(0);
+    for (const i of W.land) {
+      const c = D.cells.country[i] - 1; if (c < 0 || seen[c]) continue; seen[c] = 1;
+      const b = i * 4, o4 = c * 4; fillA[o4] = base[b]; fillA[o4 + 1] = base[b + 1]; fillA[o4 + 2] = base[b + 2]; fillA[o4 + 3] = 255;
+      darken(lineA, o4, [base[b], base[b + 1], base[b + 2]], 0.5); lineA[o4 + 3] = 190;
+    }
+    for (const i of W.land) out[i * 4 + 3] = 0;
+    const F = app.fringe; for (let k = 0; k < F.cell.length; k++) out[F.cell[k] * 4 + 3] = 0;
+    R.setPolyColors('countryFill', fillA, lineA); R.polys.countryFill.alpha = 1; R.polys.countryFill.lineAlpha = 1;
+  }
+}
+// Painting inside a smooth province breaks it back into cells so the change is visible immediately.
+function unsmoothFor(list) {
+  if (app.smooth !== 'owner') return list;
+  const W = app.W, admin = W.D.cells.admin1, { start, items } = app.provCells, broke = [];
+  for (const i of list) { const p = admin[i]; if (p && app.provPure[p]) { app.provPure[p] = 0; broke.push(p); } }
+  if (!broke.length) return list;
+  const fillA = app.polyRGBA.nationProv;
+  const more = [...list];
+  for (const p of broke) { fillA[(p - 1) * 4 + 3] = 0; for (let k = start[p]; k < start[p + 1]; k++) more.push(items[k]); }
+  app.R.setPolyColors('nationProv', fillA, app.polyRGBA.nationProvLine);
+  return more;
 }
 function overlayPlanUnits(p, arr) {
   const W = app.W;
@@ -160,6 +287,7 @@ function overlayPlanUnits(p, arr) {
 }
 // Cheap update for a handful of cells (painting).
 export function refreshCells(list) {
+  list = unsmoothFor(list);
   if (app.cellColorOne) for (const i of list) app.cellColorOne(i, app.baseRGBA);
   composeCells(list);
   // neighbours' border pixels depend on these cells too, so widen by one row
@@ -224,7 +352,7 @@ function drawLabels(ctx, R) {
     }
   }
   // cities
-  if (app.show.cities && scale > 900) {
+  if (app.show.cities && scale > 900 && !(app.basemap && app.basemap.hasLabels)) {
     const lim = scale > 20000 ? 7000 : scale > 6000 ? 1500 : scale > 2500 ? 400 : 90;
     const C = app.D.units.cities;
     for (let k = 0; k < Math.min(lim, C.length); k++) {

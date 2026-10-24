@@ -348,9 +348,10 @@ function dp(pts, tol) { // Douglas-Peucker on [lng,lat]
   return pts.filter((_, i) => keep[i]);
 }
 const merc = (lng, lat) => { lat = Math.max(-85.05, Math.min(85.05, lat)); const s = Math.sin(lat * Math.PI / 180); return [(lng + 180) / 360, 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)]; };
-function buildGeom(features, tol, file, withFill = true) {
+function buildGeom(features, tol, file, withFill = true, uidOf = (f, u) => u) {
   const pos = [], uid = [], idx = [], lpos = [], luid = [];
-  features.forEach((f, u) => {
+  features.forEach((f, fi) => {
+    const u = uidOf(f, fi);
     for (const poly of polysOf(f.geometry)) {
       const rings = poly.map((r) => dp(r, tol)).filter((r) => r.length >= 4);
       if (!rings.length) continue;
@@ -378,13 +379,17 @@ function buildGeom(features, tol, file, withFill = true) {
 log('geometry');
 const geomProv = buildGeom(admin1G, 0.02, 'geom_prov.bin');
 const geomCounty = buildGeom(countiesG, 0.006, 'geom_county.bin');
-const geomCountry = buildGeom(countriesG, 0.03, 'geom_country.bin', false);
+// land mask + smooth country fills: 10m countries, uid = our country index (or countries.length when unmatched)
+const countries10 = rd('ne/geojson/ne_10m_admin_0_countries.geojson').features;
+const geomCountry = buildGeom(countries10, 0.012, 'geom_country.bin', true, (f) => { const k = countryByA3.get(f.properties.ADM0_A3); return k ? k - 1 : countries.length; });
+const lakes10 = rd('ne/geojson/ne_10m_lakes.geojson').features.filter((f) => (f.properties.scalerank ?? 0) <= 8);
+const geomLakes = buildGeom(lakes10, 0.012, 'geom_lakes.bin', true, () => 0);
 
 // ---------- units.json ----------
 const r3 = (v) => v == null ? null : Math.round(v * 1000) / 1000;
 const units = {
   grid: { W: CW, H: CH, res: CRES, layout },
-  geom: { prov: geomProv, county: geomCounty, country: geomCountry },
+  geom: { prov: geomProv, county: geomCounty, country: geomCountry, lakes: geomLakes },
   terrains: ['Ocean', 'Lake', 'Ice', 'Polar', 'Tundra', 'Boreal forest', 'Temperate', 'Tropical', 'Desert', 'Mountains', 'Highlands', 'River delta'],
   countries: countries.map((c) => ({ ...c, label: [r3(c.label[0]), r3(c.label[1])] })),
   provinces: admin1.map((a) => ({ n: a.name, c: a.country, t: a.type, r: a.region, iso: a.iso, pop: a.pop, area: a.area, perim: a.perim, l: [r3(a.label[0]), r3(a.label[1])] })),

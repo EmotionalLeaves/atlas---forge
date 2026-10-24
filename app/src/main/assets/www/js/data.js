@@ -15,12 +15,12 @@ export async function loadData(progress = () => {}) {
   progress('Loading atlas…', 0.05);
   const units = await (await fetch('data/units.json')).json();
   progress('Loading world grid…', 0.25);
-  const [cellsBuf, provBuf, countyBuf, countryBuf] = await Promise.all([bin('data/cells.bin'), bin('data/geom_prov.bin'), bin('data/geom_county.bin'), bin('data/geom_country.bin')]);
+  const [cellsBuf, provBuf, countyBuf, countryBuf, lakesBuf] = await Promise.all([bin('data/cells.bin'), bin('data/geom_prov.bin'), bin('data/geom_county.bin'), bin('data/geom_country.bin'), bin('data/geom_lakes.bin')]);
   progress('Unpacking…', 0.6);
   const L = units.grid.layout, T = { Uint16Array, Uint8Array, Float32Array };
   const cells = {};
   for (const k of Object.keys(L)) cells[k] = new T[L[k].type](cellsBuf, L[k].offset, L[k].length);
-  const geom = { prov: parseGeom(provBuf, units.geom.prov), county: parseGeom(countyBuf, units.geom.county), country: parseGeom(countryBuf, units.geom.country) };
+  const geom = { prov: parseGeom(provBuf, units.geom.prov), county: parseGeom(countyBuf, units.geom.county), country: parseGeom(countryBuf, units.geom.country), lakes: parseGeom(lakesBuf, units.geom.lakes) };
   // adjacency lists
   const adj = {};
   for (const [k, pairs] of Object.entries(units.adj)) {

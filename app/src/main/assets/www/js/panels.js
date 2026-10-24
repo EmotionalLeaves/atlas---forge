@@ -1,5 +1,7 @@
 // Atlas Forge — UI panels.
 import { h, fmt, pct, dateOf, esc, hex, parseHex, hsl, clamp, PARTY_COLORS, rampLUT, RAMPS } from './util.js';
+import { saveSettings, applyMapStyle } from './app.js';
+import { BASEMAPS } from './basemap.js';
 import { app, setTheme, refresh, theme, plan, select, undoRedo, scheduleStats, computePlanStats, rebuildCatalog, setWorld, step, autosave, viewHistory, restoreHistory } from './app.js';
 import { rel, setRel, computeAggregates, computeAdjacency, newNation, cellLngLat, addNews, GOVS, prodOf, MAXN, warBetween } from './world.js';
 import { declareWar, endWar, annex, DISASTERS } from './sim.js';
@@ -44,9 +46,11 @@ export function init() {
   const updPad = () => {
     const r = sheet.getBoundingClientRect(), wide = window.innerWidth >= 760;
     app.R.pad = wide ? { l: r.right, b: 0 } : { l: 0, b: Math.max(0, window.innerHeight - r.top) };
+    $('#attr').style.bottom = (wide ? 6 : app.R.pad.b + 4) + 'px';
   };
   if (window.ResizeObserver) new ResizeObserver(updPad).observe(sheet);
   window.addEventListener('resize', updPad); sheet.addEventListener('transitionend', updPad); updPad();
+  requestAnimationFrame(() => { updPad(); app.R.flyTo(15, 25, 1); });
   $('#sheet .grab').onclick = () => $('#sheet').classList.toggle('collapsed');
   window.atlasBack = () => {
     if (!$('#modal').classList.contains('hidden')) { closeModal(); return true; }
@@ -130,6 +134,15 @@ function quickThemes(ids) {
 }
 
 // ------------------------------------------------------------------ explore
+export function mapStyleSection() {
+  const st = app.settings, online = st.basemap !== 'none';
+  const out = h('b', null, Math.round(st.opacity * 100) + '%');
+  return section('Base map',
+    h('div', { class: 'chips' }, Object.entries(BASEMAPS).map(([k, b]) => h('button', { class: 'chip-s' + (st.basemap === k ? ' on' : ''), onclick: () => { st.basemap = k; saveSettings(); applyMapStyle(); refreshPanels(); } }, b.label))),
+    online ? h('label', { class: 'slider' }, 'Overlay', h('input', { type: 'range', min: 0, max: 1, step: 0.02, value: st.opacity, oninput: (e) => { st.opacity = +e.target.value; out.textContent = Math.round(st.opacity * 100) + '%'; app.R.opts.opacity = st.opacity; app.R.dirty(); }, onchange: saveSettings }), out) : null,
+    online && BASEMAPS[st.basemap].labels ? toggle('Place names on top', st.mapLabels, (v) => { st.mapLabels = v; saveSettings(); applyMapStyle(); }) : null,
+    online ? h('div', { class: 'muted small' }, 'Online map — needs internet. Built-in works offline.') : null);
+}
 function welcomeCard() {
   let seen = false; try { seen = localStorage.getItem('af_welcome') === '1'; } catch {}
   if (seen) return null;
@@ -148,9 +161,10 @@ function renderExplore(b) {
   b.append(section(null, legendEl()));
   b.append(section('Quick maps', quickThemes([['nations', 'Nations'], ['density', 'Density'], ['dev', 'Development'], ['lean', 'Politics'], ['terrain', 'Terrain'], ['c_country', 'Real countries'], ['c_gdppc', 'Wealth'], ['p_name', 'Provinces'], ['k_pop', 'US counties'], ['climate', 'Climate']]),
     btn(`Browse all ${app.catalog.length.toLocaleString()} maps…`, openThemeBrowser, 'wide primary')));
+  b.append(mapStyleSection());
   b.append(section('Show', h('div', { class: 'tog-row' },
     toggle('Real borders', app.show.borders, (v) => { app.show.borders = v; refresh(); }),
-    toggle('Cities', app.show.cities, (v) => { app.show.cities = v; app.R.points.visible = v; app.R.dirty(); }),
+    toggle('Cities', app.show.cities, (v) => { app.show.cities = v; applyMapStyle(); }),
     toggle('Labels', app.show.labels, (v) => { app.show.labels = v; app.R.dirty(); }),
     toggle('Cell grid', app.show.grid, (v) => { app.show.grid = v; refresh(); }))));
   const W = app.W;

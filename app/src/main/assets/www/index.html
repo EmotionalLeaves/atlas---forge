@@ -9,7 +9,8 @@
 </head>
 <body data-mode="explore">
 <div id="app">
-  <div id="map"><canvas id="gl"></canvas><canvas id="labels"></canvas></div>
+  <div id="map"><div id="tilesBase" class="tiles"></div><canvas id="gl"></canvas><div id="tilesLabels" class="tiles"></div><canvas id="labels"></canvas></div>
+  <div id="attr"></div>
   <header id="top">
     <button id="menuBtn" class="round" aria-label="Menu"></button>
     <div class="title"><b>Atlas Forge</b><span id="date"></span></div>
