@@ -73,7 +73,8 @@ export function planStats(W, p) {
   for (let u = 0; u < A.length; u++) {
     if (p.unit === 'cells' && !W.D.cells.country[u]) continue;
     if (!eligible(W, p, u)) continue;
-    const pop = pops[u]; totalElig += pop; const d = A[u];
+    const pop = pops[u]; totalElig += pop; let d = A[u];
+    if (d >= n) { A[u] = -1; d = -1; }
     if (d < 0) { unassignedPop += pop; unassignedUnits++; continue; }
     const R = res[d]; R.pop += pop; R.units++;
     cellVote(leans[u], parties, ruling, stab, R.votes, pop);

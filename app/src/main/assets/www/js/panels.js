@@ -314,6 +314,7 @@ function renderSim(b) {
 function renderDraw(b) {
   const W = app.W, p = plan();
   if (!p) { b.append(newPlanForm()); return; }
+  if (app.district >= p.n || app.district < 0) app.district = 0;
   b.append(h('div', { class: 'planbar' },
     h('select', { onchange: (e) => { app.activePlan = +e.target.value; app.district = 0; computePlanStats(); refresh(); refreshPanels(); } }, W.plans.map((x) => h('option', { value: x.id, selected: x.id === p.id }, x.name + (x.status && x.status !== 'Scratch work' ? ` · ${x.status}` : '')))),
     btn('＋', () => openModal('New district plan', newPlanForm(true)), 'sq'),
@@ -406,7 +407,7 @@ function exportReport(p, st, sp) {
 function importPlanCSV(p) {
   const inp = h('input', { type: 'file', accept: '.csv,text/csv,text/plain,*/*', style: { display: 'none' }, onchange: async (e) => {
     const f = e.target.files[0]; if (!f) return;
-    const r = importCSV(app.W, p, await f.text()); app.undo = []; computePlanStats(); refresh(); refreshPanels();
+    const r = importCSV(app.W, p, await f.text()); app.undo = []; app.redo = []; computePlanStats(); refresh(); refreshPanels();
     toast(`Imported ${r.ok.toLocaleString()} assignments${r.bad ? `, skipped ${r.bad}` : ''}`, 4000);
   } });
   document.body.append(inp); inp.click(); setTimeout(() => inp.remove(), 60000);
@@ -458,14 +459,14 @@ function openPlanMenu(p) {
   const W = app.W;
   const body = h('div', { class: 'form' },
     h('label', null, 'Name', h('input', { value: p.name, onchange: (e) => { p.name = e.target.value; rebuildCatalog(); refreshPanels(); } })),
-    h('label', null, 'Number of districts', h('input', { type: 'number', min: 2, max: 435, value: p.n, onchange: (e) => { setDistrictCount(p, clamp(+e.target.value || 2, 2, 435)); app.district = Math.min(app.district, p.n - 1); computePlanStats(); refresh(); refreshPanels(); } })),
+    h('label', null, 'Number of districts', h('input', { type: 'number', min: 2, max: 435, value: p.n, onchange: (e) => { setDistrictCount(p, clamp(+e.target.value || 2, 2, 435)); app.undo = []; app.redo = []; app.district = Math.min(app.district, p.n - 1); computePlanStats(); refresh(); refreshPanels(); } })),
     h('label', null, 'Status', h('select', { onchange: (e) => { p.status = e.target.value; refreshPanels(); } }, ['Scratch work', 'In progress', 'Ready to share'].map((x) => h('option', { selected: (p.status || 'Scratch work') === x }, x)))),
     h('label', null, 'Notes', h('textarea', { rows: 3, placeholder: 'What is this map for?', oninput: (e) => { p.notes = e.target.value; } }, p.notes || '')),
     toggle('Use this plan for elections in the simulation', p.electionsUse, (v) => { p.electionsUse = v; }),
     h('div', { class: 'btns' },
       btn('Fill the gaps', () => { const ch = autoFill(W, p); if (ch.size) app.undo.push({ tgt: 'plan', changes: ch, plan: p.id }); closeModal(); computePlanStats(); refresh(); refreshPanels(); toast(`Assigned ${ch.size.toLocaleString()} units`); }),
-      btn('Random plan', () => { randomPlan(W, p); app.undo = []; closeModal(); computePlanStats(); refresh(); refreshPanels(); }),
-      btn('Clear all', () => { if (confirm('Clear every district in this plan?')) { p.assign.fill(-1); app.undo = []; closeModal(); computePlanStats(); refresh(); refreshPanels(); } }),
+      btn('Random plan', () => { randomPlan(W, p); app.undo = []; app.redo = []; closeModal(); computePlanStats(); refresh(); refreshPanels(); }),
+      btn('Clear all', () => { if (confirm('Clear every district in this plan?')) { p.assign.fill(-1); app.undo = []; app.redo = []; closeModal(); computePlanStats(); refresh(); refreshPanels(); } }),
       btn('Export CSV', () => exportPlanCSV(p)),
       btn('Show as map', () => { closeModal(); setTheme('plan_' + p.id); }),
       btn('Delete plan', () => { if (confirm('Delete this plan?')) { W.plans = W.plans.filter((x) => x !== p); app.activePlan = W.plans.length ? W.plans[0].id : null; rebuildCatalog(); closeModal(); computePlanStats(); refresh(); refreshPanels(); } }, 'danger')));

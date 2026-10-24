@@ -44,6 +44,8 @@ export function tick(W) {
 
   // ---- wars ----
   if (W.wars.length && W.settings.wars) { if (fightWars(W)) { ev.owner = true; computeAggregates(W); } }
+  else if (W.wars.length) for (const w of [...W.wars]) endWar(W, w, `${nations[w.a].name} and ${nations[w.b].name} agree to a ceasefire.`);
+  W.wars = W.wars.filter((w) => nations[w.a].alive && nations[w.b].alive && nations[w.a].cells > 0 && nations[w.b].cells > 0);
   // ---- nations: stability, government, rebellion ----
   for (let o = 1; o < nn; o++) {
     const n = nations[o]; if (!n.alive) continue;
@@ -55,7 +57,8 @@ export function tick(W) {
     if (n.gov === 'Republic' && n.stab < 0.22 && r() < 0.004) { n.gov = 'Junta'; addNews(W, `Military coup in ${n.name}; a junta takes power.`, 'coup', [o]); }
     else if (n.gov === 'Junta' && n.stab > 0.5 && r() < 0.008) { n.gov = 'Republic'; n.lastElection = -999; addNews(W, `${n.name} returns to civilian rule.`, 'coup', [o]); }
     else if (n.gov === 'Junta' && r() < 0.0015) { n.gov = 'Autocracy'; }
-    else if (n.gov === 'Provisional' && W.month - n.founded > 24 && n.stab > 0.35 && r() < 0.03) { n.gov = 'Republic'; n.lastElection = -999; addNews(W, `${n.name} adopts a constitution.`, 'info', [o]); }
+    else if (n.gov === 'Provisional' && W.month - n.founded > 24 && n.stab > 0.26 && r() < 0.03) { n.gov = 'Republic'; n.lastElection = -999; n.bonus = (n.bonus || 0) + 0.08; addNews(W, `${n.name} adopts a constitution.`, 'info', [o]); }
+    else if (n.gov === 'Provisional' && W.month - n.founded > 36 && r() < 0.012) { n.gov = r() < 0.6 ? 'Autocracy' : 'Monarchy'; addNews(W, `A strongman takes charge in ${n.name}.`, 'coup', [o]); }
     else if (n.gov === 'Autocracy' && n.stab < 0.18 && r() < 0.003) { n.gov = 'Provisional'; n.founded = W.month; addNews(W, `Revolution in ${n.name}! The regime falls.`, 'coup', [o]); }
     if (W.settings.rebels && n.stab < 0.2 && n.cells > 25 && r() < 0.012) { if (rebellion(W, n)) ev.owner = true; }
     // elections
@@ -94,9 +97,9 @@ function fightWars(W) {
   const inWar = new Uint8Array(nn); for (const w of W.wars) { inWar[w.a] = 1; inWar[w.b] = 1; }
   for (let k = 0; k < land.length; k++) {
     const i = land[k], o = owner[i]; if (!o || !inWar[o]) continue;
-    const x = i % Wd, y = (i / Wd) | 0;
-    const nb = [y * Wd + ((x + 1) % Wd), y * Wd + ((x - 1 + Wd) % Wd), y > 0 ? i - Wd : -1, y < Hd - 1 ? i + Wd : -1];
-    for (const j of nb) {
+    const y = (i / Wd) | 0, x = i - y * Wd;
+    for (let s = 0; s < 4; s++) {
+      const j = s === 0 ? y * Wd + (x + 1 === Wd ? 0 : x + 1) : s === 1 ? y * Wd + (x === 0 ? Wd - 1 : x - 1) : s === 2 ? (y > 0 ? i - Wd : -1) : (y < Hd - 1 ? i + Wd : -1);
       if (j < 0) continue; const q = owner[j]; if (!q || q === o || !warPairs.has(pairKey(o, q))) continue;
       const ratio = str[q] / (str[q] + str[o]);
       let p = 0.45 * ratio * ratio * ratio;
@@ -160,7 +163,7 @@ export function endWar(W, w, text) {
 
 export function annex(W, win, lose) {
   const { owner, land } = W; for (const i of land) if (owner[i] === lose.id) owner[i] = win.id;
-  lose.alive = false; lose.cells = 0;
+  lose.alive = false; lose.cells = 0; lose.bloc = 0;
   for (const w of [...W.wars]) if (w.a === lose.id || w.b === lose.id) W.wars = W.wars.filter((x) => x !== w);
 }
 
@@ -203,7 +206,7 @@ function rebellion(W, n) {
     for (const i of cellsList) owner[i] = target.id;
     addNews(W, `${target.name} declares independence from ${n.name}!`, 'rebel', [n.id, target.id]);
   }
-  for (let k = 0; k < MAXN; k++) W.rel[target.id * MAXN + k] = W.rel[n.id * MAXN + k] * 0.5;
+  for (let k = 1; k < W.nations.length; k++) if (k !== target.id) setRel(W, target.id, k, rel(W, n.id, k) * 0.5);
   setRel(W, n.id, target.id, -70);
   n.bonus = 0.1;
   if (W.settings.wars && r() < 0.45) declareWar(W, n.id, target.id, `Civil war: ${n.name} moves to crush ${target.name}.`);
@@ -231,7 +234,7 @@ export function cellVote(l, P, ruling, stab, out, weight) {
 
 export function holdElection(W, n) {
   n.lastElection = W.month;
-  const plan = W.plans.find((p) => p.scope === n.orig && p.electionsUse !== false && p.assign);
+  const plan = n.orig ? W.plans.find((p) => p.scope && p.scope === n.orig && p.electionsUse !== false && p.assign) : null;
   let seats = [0, 0, 0], total = 0, label = '';
   const votes = partyShares(W, n);
   const tv = votes[0] + votes[1] + votes[2];

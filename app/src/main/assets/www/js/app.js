@@ -1,7 +1,7 @@
 // Atlas Forge — core: rendering pipeline, input, painting, labels.
 import { MapRenderer, mercX, mercY, unMercX, unMercY } from './gl.js';
 import { loadData } from './data.js';
-import { createWorld, computeAggregates, computeAdjacency, cellAt, cellLngLat, addNews, newNation, ownerAt } from './world.js';
+import { createWorld, computeAggregates, computeAdjacency, cellAt, cellLngLat, addNews, newNation, ownerAt, rel, setRel } from './world.js';
 import { tick, applyDisaster } from './sim.js';
 import { buildCatalog, colorize, unitAgg } from './themes.js';
 import { planStats, paintUnits, brushCells, floodUnits, eligible, districtVotes, parentUnits } from './plans.js';
@@ -79,6 +79,7 @@ export async function boot() {
 
 export function setWorld(W) {
   app.W = W; app.sel = null; app.undo = []; app.redo = []; app.aggStamp++;
+  app.paintNation = 0; app.diploTarget = 0; app.district = 0; app.histOwner = null; app.histMonth = null; app.stats = null; app.planCentroids = null;
   W.planDistrictVotes = (p, n) => districtVotes(W, p, n);
   W.onNews = (n) => UI.onNews && UI.onNews(n);
   app.catalog = buildCatalog(app);
@@ -506,6 +507,7 @@ function strokeMove(px, py) {
     paintUnits(W, p, list, app.tool === 'erase' ? -1 : app.district, stroke.changes, app.drawOpts.noOverwrite); scheduleStats();
   }
   else if (stroke.tgt === 'borders') {
+    if (!W.nations[app.paintNation]) app.paintNation = 0;
     for (const i of list) { if (W.owner[i] === app.paintNation) continue; if (!stroke.changes.has(i)) stroke.changes.set(i, W.owner[i]); W.owner[i] = app.paintNation; }
     if (app.paintNation && !W.nations[app.paintNation].alive) W.nations[app.paintNation].alive = true;
     stroke.dirtyNations = true;
@@ -522,6 +524,14 @@ function paintData(list) {
     if (a === 'pop') target[i] = Math.max(0, target[i] * v); else target[i] = v;
   }
   stroke.dataTarget = target;
+}
+// A second finger landed: this was the start of a pinch, not a paint stroke — put everything back.
+function strokeCancel() {
+  if (!stroke) return; const s = stroke; stroke = null; if (!s.changes.size) return;
+  const arr = undoArray({ tgt: s.tgt, plan: app.activePlan, arr: s.dataTarget });
+  if (arr) for (const [i, v] of s.changes) arr[i] = v;
+  if (s.tgt === 'borders' || s.tgt === 'data') { computeAggregates(app.W); computeAdjacency(app.W); app.aggStamp++; }
+  refresh(); scheduleStats();
 }
 function strokeEnd() {
   if (!stroke) return;
@@ -586,7 +596,7 @@ function releaseProvince(i) {
   const pname = W.D.units.provinces[prov - 1].n;
   const n = newNation(W, { name: pname, color: hsl(W.rng() * 360, 0.5, 0.56) }); if (!n) { UI.toast('Too many nations'); return; }
   let k = 0; for (const c of W.land) if (W.owner[c] === o && W.D.cells.admin1[c] === prov) { W.owner[c] = n.id; k++; }
-  for (let q = 0; q < 640; q++) W.rel[n.id * 640 + q] = W.rel[o * 640 + q];
+  for (let q = 1; q < W.nations.length; q++) if (q !== n.id) setRel(W, n.id, q, rel(W, o, q));
   computeAggregates(W); computeAdjacency(W); app.aggStamp++; rebuildCatalog();
   addNews(W, `${n.name} becomes independent from ${W.nations[o].name}.`, 'rebel', [o, n.id]);
   select({ cell: i, nation: n.id }); refresh(); UI.toast(`${n.name} released (${k} cells)`);
@@ -624,7 +634,7 @@ function setupInput(el) {
     if (ptrs.size === 1) {
       start = { x: e.offsetX, y: e.offsetY, t: performance.now() }; mode = 'maybe';
       if (paintTarget()) { if (strokeStart(e.offsetX, e.offsetY)) mode = 'paint'; }
-    } else if (ptrs.size === 2) { if (mode === 'paint') strokeEnd(); mode = 'pinch'; lastPinch = null; }
+    } else if (ptrs.size === 2) { if (mode === 'paint') strokeCancel(); mode = 'pinch'; lastPinch = null; }
   });
   el.addEventListener('pointermove', (e) => {
     if (!ptrs.has(e.pointerId)) return;
@@ -665,7 +675,7 @@ function simLoop(t) {
   while (acc >= 1 && performance.now() - t0 < 28) { acc -= 1; const ev = tick(app.W); owner = owner || ev.owner; n++; }
   if (acc > 3) acc = 0; // can't keep up: drop backlog
   if (!n) return;
-  app.aggStamp++;
+  app.aggStamp++; dropWorldUndo();
   if (owner) { rebuildCatalogLite(); pendingOwner = true; }
   // recolour at a pace the device can afford; maps that the sim can't change only need it when borders move
   const th = theme(), gap = Math.max(250, refreshCost * 8);
@@ -675,7 +685,9 @@ function simLoop(t) {
   }
   UI.onTick && UI.onTick();
 }
-export function step(months = 1) { for (let k = 0; k < months; k++) tick(app.W); app.aggStamp++; rebuildCatalogLite(); refresh(); UI.onTick && UI.onTick(); }
+// Once time moves on, undoing an old border/data stroke would resurrect stale state: keep only plan edits.
+function dropWorldUndo() { if (app.undo.some((e) => e.tgt !== 'plan')) app.undo = app.undo.filter((e) => e.tgt === 'plan'); if (app.redo.length) app.redo = app.redo.filter((e) => e.tgt === 'plan'); }
+export function step(months = 1) { for (let k = 0; k < months; k++) tick(app.W); app.aggStamp++; dropWorldUndo(); rebuildCatalogLite(); refresh(); UI.onTick && UI.onTick(); }
 let lastCatalogN = 0;
 function rebuildCatalogLite() { const n = app.W.nations.filter((x) => x && x.alive).length + app.W.nations.length * 1000; if (n !== lastCatalogN) { lastCatalogN = n; rebuildCatalog(); } }
 

@@ -35,6 +35,7 @@ export function createWorld(D, opts = {}) {
     n.alive = id !== ATA;
     if (W.settings.govs === 'random') n.gov = GOVS[Math.floor(rng() * 4)];
   });
+  if (opts.light) { W.pop0 = new Float32Array(W.pop); W.lean0 = new Float32Array(N); return W; } // deserialize overwrites the rest
   // ownership, development, lean
   const gdppc = units.countries.map((c) => c.pop > 0 && c.gdp > 0 ? c.gdp * 1e6 / c.pop : 3000);
   for (const i of W.land) {
@@ -77,7 +78,8 @@ export function newNation(W, { name, color, orig = 0, a3 = '', gov = 'Republic' 
     hist: { m: [], pop: [], gdp: [], cells: [], stab: [] },
   };
   n.ruling = Math.floor(W.rng() * 3);
-  W.nations[id] = n;
+  W.nations[id] = n; W.mood[id] = 0;
+  for (const k of Object.keys(W.truce)) { const a = Math.floor(k / MAXN), b = k % MAXN; if (a === id || b === id) delete W.truce[k]; }
   for (let k = 0; k < MAXN; k++) { W.rel[id * MAXN + k] = 0; W.rel[k * MAXN + id] = 0; }
   return n;
 }
@@ -103,7 +105,7 @@ export function computeAggregates(W) {
     const i = land[k], o = owner[i]; if (!o) continue;
     const p = pop[i], d = dev[i], l = lean[i]; P[o] += p; G[o] += p * PROD[(d * 1024 + 0.5) | 0]; C[o]++; DV[o] += d * p; LE[o] += l * p;
     LH[o * LEAN_BINS + Math.min(LEAN_BINS - 1, ((l + 1) * 0.5 * LEAN_BINS) | 0)] += p;
-    if (orig[o] !== country[i]) OC[o]++;
+    if (orig[o] && orig[o] !== country[i]) OC[o]++;
     const y = (i / Wd) | 0, x = i - y * Wd;
     SX[o] += cc[x]; SY[o] += cs[x]; SZ[o] += y;
     if (p > TOPV[o]) { TOPV[o] = p; TOP[o] = i; }

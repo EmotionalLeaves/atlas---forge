@@ -24,7 +24,7 @@ export function buildCatalog(app) {
   add({ id: 'income', layer: 'cells', group: G, label: 'Income per person', kind: 'num', ramp: 'ember', log: true, value: (i) => prodFast(W.dev[i]), fmt: (v) => '$' + fmt(v) });
   add({ id: 'lean', layer: 'cells', group: G, label: 'Political lean', kind: 'div', ramp: 'diverge', value: (i) => W.lean[i], fmt: (v) => v < -0.05 ? 'Left ' + Math.round(-v * 100) : v > 0.05 ? 'Right ' + Math.round(v * 100) : 'Centre', domain: [-0.8, 0.8], desc: 'Rose = left, teal = right' });
   add({ id: 'party', layer: 'cells', group: G, label: 'Leading party (local)', kind: 'cat', value: (i) => { const n = nat[W.owner[i]]; if (!n) return 0; const v = [0, 0, 0]; cellVote(W.lean[i], n.parties, n.ruling, n.stab, v, 1); return 1 + v.indexOf(Math.max(...v)); }, catColor: (c) => PARTY_COLORS[c - 1] || [80, 80, 80], catLabel: (c) => ['—', 'Left party', 'Centre party', 'Right party'][c] });
-  add({ id: 'occupied', layer: 'cells', group: G, label: 'Occupied territory', kind: 'cat', value: (i) => !W.owner[i] ? 0 : nat[W.owner[i]].orig === C.country[i] ? 1 : 2, catColor: (c) => [[80, 80, 80], [70, 110, 90], [220, 70, 60]][c], catLabel: (c) => ['Unclaimed', 'Home territory', 'Occupied / annexed'][c] });
+  add({ id: 'occupied', layer: 'cells', group: G, label: 'Occupied territory', kind: 'cat', value: (i) => !W.owner[i] ? 0 : (!nat[W.owner[i]].orig || nat[W.owner[i]].orig === C.country[i]) ? 1 : 2, catColor: (c) => [[80, 80, 80], [70, 110, 90], [220, 70, 60]][c], catLabel: (c) => ['Unclaimed', 'Home territory', 'Occupied / annexed'][c] });
   add({ id: 'terrain', layer: 'cells', group: G, label: 'Terrain', kind: 'cat', value: (i) => W.terrain[i], catColor: (c) => TERRAIN_COLORS[c], catLabel: (c) => U.terrains[c] });
   add({ id: 'climate', layer: 'cells', group: G, label: 'Climate band', kind: 'cat', value: (i) => { const a = Math.abs(cellLat(W, i)); return a < 23.5 ? 1 : a < 35 ? 2 : a < 50 ? 3 : a < 66.5 ? 4 : 5; }, catColor: (c) => [[0, 0, 0], [214, 92, 64], [230, 170, 80], [120, 180, 90], [70, 130, 160], [200, 215, 235]][c], catLabel: (c) => ['', 'Tropical', 'Subtropical', 'Temperate', 'Subarctic', 'Polar'][c] });
   add({ id: 'rivers', layer: 'cells', group: G, label: 'Rivers & lakes', kind: 'cat', value: (i) => (C.flags[i] & 1) ? 2 : 1, catColor: (c) => c === 2 ? [70, 150, 230] : [200, 196, 180], catLabel: (c) => c === 2 ? 'Major river' : 'Land' });
@@ -141,7 +141,7 @@ const MATH = ['abs', 'log', 'log10', 'log2', 'sqrt', 'min', 'max', 'pow', 'exp',
 export function compileFormula(expr, layer, customNames = []) {
   const vars = Object.keys(FORMULA_VARS[layer]).concat(layer === 'cells' ? customNames.map(safeName) : []);
   if (/[^\w\s+\-*/%().,<>=!?:&|^]/.test(expr)) throw new Error('Only numbers, variables and + − × ÷ ( ) are allowed');
-  const ids = expr.match(/[A-Za-z_]\w*/g) || [];
+  const ids = expr.replace(/(?:\b\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?\b/g, ' ').match(/[A-Za-z_]\w*/g) || [];
   for (const id of ids) if (!vars.includes(id) && !MATH.includes(id)) throw new Error(`Unknown name “${id}”`);
   const used = vars.filter((v) => ids.includes(v));
   const fn = new Function(...used, ...MATH, `"use strict"; return (${expr});`);

@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
@@ -166,7 +167,11 @@ public class MainActivity extends Activity {
                     if (os == null) return "";
                     os.write(bytes);
                 }
-                return "Downloads/AtlasForge/" + name;
+                String saved = name;
+                try (Cursor c = getContentResolver().query(uri, new String[] { MediaStore.Downloads.DISPLAY_NAME }, null, null, null)) {
+                    if (c != null && c.moveToFirst()) saved = c.getString(0);
+                } catch (Exception ignored) { }
+                return "Downloads/AtlasForge/" + saved;
             } catch (Exception e) {
                 Log.e("AtlasForge", "saveFile failed", e);
                 return "";

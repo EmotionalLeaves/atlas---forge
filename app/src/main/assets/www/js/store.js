@@ -54,7 +54,7 @@ export function deserialize(D, S) {
   W.blocs = S.blocs; W.wars = S.wars; W.truce = S.truce; W.news = S.news; W.formulas = S.formulas || [];
   W.mood.fill(0); W.mood.set(S.mood);
   W.rel.fill(0); const nn = S.nn; for (let a = 0; a < nn; a++) for (let b = 0; b < nn; b++) W.rel[a * MAXN + b] = S.rel[a * nn + b];
-  W.owner.fill(0); fromLand(W, S.owner, W.owner); fromLand(W, S.pop, W.pop); fromLand(W, S.pop0, W.pop0); fromLand(W, S.dev, W.dev); fromLand(W, S.lean, W.lean); if (S.lean0) fromLand(W, S.lean0, W.lean0); fromLand(W, S.terrain, W.terrain);
+  W.owner.fill(0); fromLand(W, S.owner, W.owner); fromLand(W, S.pop, W.pop); fromLand(W, S.pop0, W.pop0); fromLand(W, S.dev, W.dev); fromLand(W, S.lean, W.lean); if (S.lean0) fromLand(W, S.lean0, W.lean0); else W.lean0.set(W.lean); fromLand(W, S.terrain, W.terrain);
   W.custom = {}; for (const [k, v] of Object.entries(S.custom || {})) { const a = new Float32Array(W.N); fromLand(W, v, a); W.custom[k] = a; }
   W.plans = (S.plans || []).map((p) => { let assign; if (p.unit === 'cells') { assign = new Int16Array(W.N).fill(-1); fromLand(W, p.assign, assign); } else assign = Int16Array.from(p.assign); return { ...p, assign }; });
   if (S.timeline && S.timeline.key && S.timeline.key.length === W.land.length) {
