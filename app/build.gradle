@@ -1,0 +1,42 @@
+plugins {
+    id 'com.android.application'
+}
+
+def runNumber = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as int
+
+android {
+    namespace 'com.emotionalleaves.atlasforge'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.emotionalleaves.atlasforge'
+        minSdk 29
+        targetSdk 34
+        versionCode runNumber
+        versionName "1.0.${runNumber}"
+    }
+
+    signingConfigs {
+        release {
+            storeFile file('atlasforge.jks')
+            storePassword 'atlasforge'
+            keyAlias 'atlasforge'
+            keyPassword 'atlasforge'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+        debug {
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

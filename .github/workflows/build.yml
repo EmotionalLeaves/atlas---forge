@@ -1,0 +1,56 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Build release APK
+        run: |
+          chmod +x gradlew
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace assembleRelease 2>&1 | tee build.log
+
+      - name: Name the APK
+        run: cp app/build/outputs/apk/release/app-release.apk "AtlasForge-v1.0.${{ github.run_number }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AtlasForge-v1.0.${{ github.run_number }}
+          path: AtlasForge-*.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Atlas Forge v1.0.${{ github.run_number }}
+          body: Download the APK below and open it on your phone to install (allow installs from your browser/files app if asked). It installs over earlier versions and keeps your saved worlds.
+          files: AtlasForge-*.apk
+          make_latest: true
+
+      - name: Keep the build log on the ci-log branch
+        if: always()
+        run: |
+          mkdir -p /tmp/ci && (cp build.log /tmp/ci/build.log 2>/dev/null || echo "no build log" > /tmp/ci/build.log)
+          echo "${{ job.status }} run=${{ github.run_number }} sha=${{ github.sha }}" > /tmp/ci/status.txt
+          tail -n 120 /tmp/ci/build.log > /tmp/ci/tail.txt
+          cd /tmp/ci && git init -q && git checkout -q -b ci-log
+          git config user.name "ci" && git config user.email "ci@users.noreply.github.com"
+          git add . && git commit -qm "build log ${{ github.run_number }}"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" ci-log

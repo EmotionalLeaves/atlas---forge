@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- globe -->
+    <path android:fillColor="#00000000" android:strokeColor="#F2B544" android:strokeWidth="3.2"
+        android:pathData="M54,28a26,26 0,1 1,-0.01 0zM28,54h52M54,28c9,7 9,45 0,52M54,28c-9,7 -9,45 0,52M33,41h42M33,67h42" />
+    <!-- district patch -->
+    <path android:fillColor="#E0607E" android:pathData="M57,44l9,-1 4,8 -6,6 -7,-4z" />
+    <path android:fillColor="#26A096" android:pathData="M42,58l9,-2 3,8 -7,5 -6,-4z" />
+</vector>
