@@ -7,8 +7,9 @@ function parseGeom(buf, hdr) {
   const uid = new Uint16Array(buf, o, hdr.nVerts); o += hdr.nVerts * 2; o += (4 - (o % 4)) % 4;
   const idx = new Uint32Array(buf, o, hdr.nIdx); o += hdr.nIdx * 4;
   const lpos = new Float32Array(buf, o, hdr.nLine * 2); o += hdr.nLine * 8;
-  const luid = new Uint16Array(buf, o, hdr.nLine);
-  return { pos, uid, idx, lpos, luid };
+  const luid = new Uint16Array(buf, o, hdr.nLine); o += hdr.nLine * 2;
+  const lnb = hdr.nb ? new Uint16Array(buf, o, hdr.nLine) : null;
+  return { pos, uid, idx, lpos, luid, lnb };
 }
 
 export async function loadData(progress = () => {}) {

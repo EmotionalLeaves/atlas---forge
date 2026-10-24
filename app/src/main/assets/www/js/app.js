@@ -4,7 +4,7 @@ import { loadData } from './data.js';
 import { createWorld, computeAggregates, computeAdjacency, cellAt, cellLngLat, addNews, newNation, ownerAt } from './world.js';
 import { tick, applyDisaster } from './sim.js';
 import { buildCatalog, colorize, unitAgg } from './themes.js';
-import { planStats, paintUnits, brushCells, floodUnits, eligible, districtVotes } from './plans.js';
+import { planStats, paintUnits, brushCells, floodUnits, eligible, districtVotes, parentUnits } from './plans.js';
 import { getSlot, putSlot, serialize, deserialize } from './store.js';
 import { TERRAIN_COLORS, clamp, h, hsl } from './util.js';
 import * as UI from './panels.js';
@@ -15,6 +15,7 @@ export const app = {
   tool: 'pan', district: 0, brush: 2, paintNation: 0, dataAttr: 'dev', dataValue: 0.5, disaster: 'quake', editTool: 'borders',
   sel: null, undo: [], redo: [], aggStamp: 0,
   settings: { basemap: 'streets', opacity: 0.72, mapLabels: true },
+  drawOpts: { parent: false, noOverwrite: false, showData: false, hideDistricts: false, highlightUnassigned: true, boundaries: true }, drawTab: 'paint',
 };
 try { Object.assign(app.settings, JSON.parse(localStorage.getItem('af_settings') || '{}')); } catch {}
 export function saveSettings() { try { localStorage.setItem('af_settings', JSON.stringify(app.settings)); } catch {} }
@@ -47,6 +48,7 @@ export async function boot() {
     app.unitRGBA = { provinces: new Uint8Array(D.units.provinces.length * 4), counties: new Uint8Array(D.units.counties.length * 4) };
     prepareSmooth(D, W0, H0);
     app.R.addLineLayer('countries', D.geom.country.lpos, [0.92, 0.94, 1, 0.22], 0);
+    app.R.addLineLayer('provLines', D.geom.prov.lpos, [0.04, 0.05, 0.08, 0.55], 0); app.R.lines.provLines.visible = false;
     setupCities();
     progress('Building the world…', 0.85);
     let W = null;
@@ -143,12 +145,15 @@ function refreshInner() {
     const tt = t.layer === poly ? t : app.catalog.find((x) => x.layer === poly);
     const lg = colorize(tt, null, units.length, tt.value, arr);
     if (t.layer === poly) app.legend = lg;
-    if (p && p.unit === poly) overlayPlanUnits(p, arr);
+    if (p && p.unit === poly) { app._unitBase = arr.slice(); overlayPlanUnits(p, arr); }
+    districtOutlines(p && p.unit === poly ? p : null);
     app.R.setPolyColors(poly, arr);
     app.R.polys[poly].alpha = 0.93;
   }
   app.R.opts.grid = app.show.grid && !(app.basemap && app.basemap.online);
-  app.R.lines.countries.visible = app.show.borders;
+  app.R.lines.countries.visible = app.show.borders || (!!p && p.unit === 'provinces' && app.drawOpts.boundaries);
+  app.R.lines.provLines.visible = !!p && p.unit !== 'provinces' && app.drawOpts.boundaries;
+  if (!poly) districtOutlines(null);
   app.R.setCellColors(out); app.R.setCellGroups(grp);
   updateHighlight();
   app.R.dirty();
@@ -163,9 +168,9 @@ function composeCells(list) {
     const i = list[k], o = i * 4;
     let r = base[o], g = base[o + 1], b = base[o + 2];
     if (cellPlan) {
-      const d = cellPlan.assign[i];
-      if (d >= 0) { const c = cellPlan.colors[d]; r = c[0]; g = c[1]; b = c[2]; }
-      else if (eligible(W, cellPlan, i)) { r = r * 0.35 + 150; g = g * 0.35 + 152; b = b * 0.35 + 158; }
+      const d = cellPlan.assign[i], O = app.drawOpts;
+      if (d >= 0 && !O.hideDistricts) { const c = cellPlan.colors[d]; if (O.showData) { r = r * 0.45 + c[0] * 0.55; g = g * 0.45 + c[1] * 0.55; b = b * 0.45 + c[2] * 0.55; } else { r = c[0]; g = c[1]; b = c[2]; } }
+      else if (eligible(W, cellPlan, i)) { if (d < 0 && O.highlightUnassigned && !O.showData) { r = r * 0.3 + 175; g = g * 0.3 + 160; b = b * 0.3 + 95; } else if (!O.showData) { r = r * 0.35 + 150; g = g * 0.35 + 152; b = b * 0.35 + 158; } }
       else { r *= 0.45; g *= 0.45; b *= 0.5; }
       grp[o + 2] = (d + 1) & 255; grp[o + 3] = (d + 1) >> 8;
     } else { grp[o + 2] = 0; grp[o + 3] = 0; }
@@ -276,14 +281,33 @@ function unsmoothFor(list) {
   app.R.setPolyColors('nationProv', fillA, app.polyRGBA.nationProvLine);
   return more;
 }
-function overlayPlanUnits(p, arr) {
-  const W = app.W;
-  for (let u = 0; u < p.assign.length; u++) {
-    const o = u * 4, d = p.assign[u];
-    if (d >= 0) { const c = p.colors[d]; arr[o] = c[0]; arr[o + 1] = c[1]; arr[o + 2] = c[2]; arr[o + 3] = 255; }
-    else if (eligible(W, p, u)) { arr[o] = arr[o] * 0.3 + 160; arr[o + 1] = arr[o + 1] * 0.3 + 162; arr[o + 2] = arr[o + 2] * 0.3 + 168; arr[o + 3] = 235; }
-    else { arr[o] *= 0.4; arr[o + 1] *= 0.4; arr[o + 2] *= 0.45; arr[o + 3] = 150; }
+// White outline around every district of a province / county plan.
+function districtOutlines(p) {
+  if (!p || app.drawOpts.hideDistricts) { app.R.setOverlayLines('districts', null); return; }
+  const g = p.unit === 'provinces' ? app.D.geom.prov : app.D.geom.county; if (!g.lnb) return;
+  const A = p.assign, out = [];
+  for (let k = 0; k < g.luid.length; k += 2) {
+    const d = A[g.luid[k]]; if (d < 0) continue;
+    const nb = g.lnb[k], e = nb === 65535 ? -2 : A[nb];
+    if (e !== d) out.push(g.lpos[k * 2], g.lpos[k * 2 + 1], g.lpos[k * 2 + 2], g.lpos[k * 2 + 3]);
   }
+  app.R.setOverlayLines('districts', new Float32Array(out));
+}
+let outlineTimer = 0;
+function scheduleOutlines(p) { clearTimeout(outlineTimer); outlineTimer = setTimeout(() => districtOutlines(p), 60); }
+function overlayPlanUnits(p, arr, list) {
+  const W = app.W, O = app.drawOpts, base = app._unitBase && app._unitBase.length === arr.length ? app._unitBase : null;
+  const one = (u) => {
+    const o = u * 4, d = p.assign[u];
+    const br = base ? base[o] : arr[o], bg = base ? base[o + 1] : arr[o + 1], bb = base ? base[o + 2] : arr[o + 2];
+    if (d >= 0 && !O.hideDistricts) { const c = p.colors[d]; if (O.showData) { arr[o] = br * 0.45 + c[0] * 0.55; arr[o + 1] = bg * 0.45 + c[1] * 0.55; arr[o + 2] = bb * 0.45 + c[2] * 0.55; } else { arr[o] = c[0]; arr[o + 1] = c[1]; arr[o + 2] = c[2]; } arr[o + 3] = 255; }
+    else if (eligible(W, p, u)) {
+      if (O.showData || (d >= 0 && O.hideDistricts)) { arr[o] = br; arr[o + 1] = bg; arr[o + 2] = bb; arr[o + 3] = 235; }
+      else if (O.highlightUnassigned) { arr[o] = br * 0.3 + 175; arr[o + 1] = bg * 0.3 + 160; arr[o + 2] = bb * 0.3 + 95; arr[o + 3] = 235; }
+      else { arr[o] = br * 0.3 + 160; arr[o + 1] = bg * 0.3 + 162; arr[o + 2] = bb * 0.3 + 168; arr[o + 3] = 235; }
+    } else { arr[o] = br * 0.4; arr[o + 1] = bg * 0.4; arr[o + 2] = bb * 0.45; arr[o + 3] = 150; }
+  };
+  if (list) for (const u of list) one(u); else for (let u = 0; u < p.assign.length; u++) one(u);
 }
 // Cheap update for a handful of cells (painting).
 export function refreshCells(list) {
@@ -322,6 +346,8 @@ function drawLabels(ctx, R) {
   ctx.lineJoin = 'round';
   // district numbers
   const p = app.mode === 'draw' ? plan() : null;
+  // keep labels out from under the header and the bottom sheet
+  const padB = (R.pad && R.pad.b) || 0; boxes.push([0, 0, vw, 62], [0, vh - padB, vw, padB + 40]);
   if (p && app.planCentroids) for (const c of app.planCentroids) { if (!c) continue; const [x, y] = R.worldToScreen(c[0], c[1]); label(String(c[2] + 1), x, y, 15, '#fff', 800); }
   if (!app.show.labels) return;
   // province / county names when zoomed in
@@ -466,24 +492,25 @@ function strokeMove(px, py) {
     const list = [];
     for (const [x, y] of pts) { const [wx, wy] = app.R.screenToWorld(x, y); const u = pickUnit(p.unit, wx, wy); if (u >= 0) list.push(u); }
     if (!list.length) return;
-    paintUnits(W, p, list, app.tool === 'erase' ? -1 : app.district, stroke.changes);
-    const arr = app.unitRGBA[p.unit]; overlayPlanUnitsFor(p, arr, list); app.R.setPolyColors(p.unit, arr); scheduleStats();
+    const all = app.drawOpts.parent && app.tool !== 'erase' ? [...new Set(list.flatMap((u) => parentUnits(W, p, u)))] : list;
+    paintUnits(W, p, all, app.tool === 'erase' ? -1 : app.district, stroke.changes, app.drawOpts.noOverwrite);
+    const arr = app.unitRGBA[p.unit]; overlayPlanUnits(p, arr, all); app.R.setPolyColors(p.unit, arr); scheduleOutlines(p); scheduleStats();
     return;
   }
   const cells = new Set();
   for (const [x, y] of pts) { const i = cellAtScreen(x, y); if (i < 0) continue; for (const c of brushCells(W, i % W.Wd, (i / W.Wd) | 0, app.brush - 1)) cells.add(c); }
-  const list = [...cells].filter((i) => W.D.cells.country[i]);
+  let list = [...cells].filter((i) => W.D.cells.country[i]);
   if (!list.length) return;
-  if (stroke.tgt === 'plan') { paintUnits(W, p, list, app.tool === 'erase' ? -1 : app.district, stroke.changes); scheduleStats(); }
+  if (stroke.tgt === 'plan') {
+    if (app.drawOpts.parent && app.tool !== 'erase') { const done = stroke.parents || (stroke.parents = new Set()); const more = []; for (const i of list) { const pr = W.D.cells.admin1[i]; if (pr && !done.has(pr)) { done.add(pr); more.push(...parentUnits(W, p, i, app.provCells)); } } list = list.concat(more); }
+    paintUnits(W, p, list, app.tool === 'erase' ? -1 : app.district, stroke.changes, app.drawOpts.noOverwrite); scheduleStats();
+  }
   else if (stroke.tgt === 'borders') {
     for (const i of list) { if (W.owner[i] === app.paintNation) continue; if (!stroke.changes.has(i)) stroke.changes.set(i, W.owner[i]); W.owner[i] = app.paintNation; }
     if (app.paintNation && !W.nations[app.paintNation].alive) W.nations[app.paintNation].alive = true;
     stroke.dirtyNations = true;
   } else if (stroke.tgt === 'data') paintData(list);
   refreshCells(list);
-}
-function overlayPlanUnitsFor(p, arr, list) {
-  for (const u of list) { const o = u * 4, d = p.assign[u]; if (d >= 0) { const c = p.colors[d]; arr[o] = c[0]; arr[o + 1] = c[1]; arr[o + 2] = c[2]; arr[o + 3] = 255; } else { arr[o] = 175; arr[o + 1] = 178; arr[o + 2] = 186; arr[o + 3] = 235; } }
 }
 function paintData(list) {
   const W = app.W, a = app.dataAttr, v = app.dataValue;
@@ -532,7 +559,7 @@ function onTap(px, py) {
     const u = p.unit === 'cells' ? i : pickUnit(p.unit, wx, wy);
     if (u < 0) return;
     if (app.tool === 'fill') {
-      const ch = new Map(); paintUnits(W, p, floodUnits(W, p, u), app.district, ch);
+      const ch = new Map(); paintUnits(W, p, floodUnits(W, p, u), app.district, ch, app.drawOpts.noOverwrite);
       if (ch.size) { app.undo.push({ tgt: 'plan', changes: ch, plan: p.id }); app.redo = []; refresh(); scheduleStats(); }
       return;
     }

@@ -348,8 +348,8 @@ function dp(pts, tol) { // Douglas-Peucker on [lng,lat]
   return pts.filter((_, i) => keep[i]);
 }
 const merc = (lng, lat) => { lat = Math.max(-85.05, Math.min(85.05, lat)); const s = Math.sin(lat * Math.PI / 180); return [(lng + 180) / 360, 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)]; };
-function buildGeom(features, tol, file, withFill = true, uidOf = (f, u) => u) {
-  const pos = [], uid = [], idx = [], lpos = [], luid = [];
+function buildGeom(features, tol, file, withFill = true, uidOf = (f, u) => u, nbOf = null) {
+  const pos = [], uid = [], idx = [], lpos = [], luid = [], lnb = [];
   features.forEach((f, fi) => {
     const u = uidOf(f, fi);
     for (const poly of polysOf(f.geometry)) {
@@ -359,6 +359,7 @@ function buildGeom(features, tol, file, withFill = true, uidOf = (f, u) => u) {
         const a = merc(r[k][0], r[k][1]), b = merc(r[k + 1][0], r[k + 1][1]);
         if (Math.abs(r[k][0]) === 180 && r[k][0] === r[k + 1][0]) continue; // skip antimeridian cuts
         lpos.push(a[0], a[1], b[0], b[1]); luid.push(u, u);
+        if (nbOf) { const v = nbOf(u, r[k][0], r[k][1], r[k + 1][0], r[k + 1][1]); lnb.push(v, v); }
       }
       if (!withFill) continue;
       const flat = [], holes = [];
@@ -368,17 +369,29 @@ function buildGeom(features, tol, file, withFill = true, uidOf = (f, u) => u) {
       for (const t of tri) idx.push(base + t);
     }
   });
-  const hdr = { nVerts: pos.length / 2, nIdx: idx.length, nLine: lpos.length / 2 };
+  const hdr = { nVerts: pos.length / 2, nIdx: idx.length, nLine: lpos.length / 2, nb: !!nbOf };
   const b = [Buffer.from(new Float32Array(pos).buffer), Buffer.from(new Uint16Array(uid).buffer)];
   const pad1 = (4 - ((pos.length * 4 + uid.length * 2) % 4)) % 4; if (pad1) b.push(Buffer.alloc(pad1));
   b.push(Buffer.from(new Uint32Array(idx).buffer), Buffer.from(new Float32Array(lpos).buffer), Buffer.from(new Uint16Array(luid).buffer));
+  if (nbOf) b.push(Buffer.from(new Uint16Array(lnb).buffer));
   fs.writeFileSync(path.join(OUT, file), Buffer.concat(b));
   log(file, JSON.stringify(hdr));
   return hdr;
 }
 log('geometry');
-const geomProv = buildGeom(admin1G, 0.02, 'geom_prov.bin');
-const geomCounty = buildGeom(countiesG, 0.006, 'geom_county.bin');
+// which unit lies across each border segment (65535 = coast / none), from the 0.05° rasters
+const sideNb = (arr) => (u, x1, y1, x2, y2) => {
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2; let nx = -(y2 - y1), ny = x2 - x1; const L = Math.hypot(nx, ny) || 1; nx /= L; ny /= L;
+  for (const e of [0.04, 0.09, 0.16]) for (const sgn of [1, -1]) {
+    const lng = mx + sgn * nx * e, lat = my + sgn * ny * e;
+    const c = Math.floor(((lng + 180) % 360 + 360) % 360 / FRES), rr = Math.floor((90 - lat) / FRES); if (rr < 0 || rr >= FH) continue;
+    const i = rr * FW + c, v = fWater[i] ? 0 : arr[i];
+    if (v && v - 1 !== u) return v - 1;
+  }
+  return 65535;
+};
+const geomProv = buildGeom(admin1G, 0.02, 'geom_prov.bin', true, (f, u) => u, sideNb(fAdmin));
+const geomCounty = buildGeom(countiesG, 0.006, 'geom_county.bin', true, (f, u) => u, sideNb(fCounty));
 // land mask + smooth country fills: 10m countries, uid = our country index (or countries.length when unmatched)
 const countries10 = rd('ne/geojson/ne_10m_admin_0_countries.geojson').features;
 const geomCountry = buildGeom(countries10, 0.012, 'geom_country.bin', true, (f) => { const k = countryByA3.get(f.properties.ADM0_A3); return k ? k - 1 : countries.length; });

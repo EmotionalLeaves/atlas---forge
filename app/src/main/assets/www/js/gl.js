@@ -153,6 +153,13 @@ export class MapRenderer {
     const gl = this.gl; const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, lpos, gl.STATIC_DRAW);
     this.lines[name] = { buf: b, n: lpos.length / 2, color, visible: true, minS };
   }
+  // dynamic thick lines (district outlines); drawn above polygons, below the selection highlight
+  setOverlayLines(name, lpos, color = [1, 1, 1, 0.95]) {
+    const gl = this.gl; this.overlays = this.overlays || {};
+    if (!lpos || !lpos.length) { delete this.overlays[name]; this.dirty(); return; }
+    const O = this.overlays[name] || (this.overlays[name] = { buf: gl.createBuffer() });
+    gl.bindBuffer(gl.ARRAY_BUFFER, O.buf); gl.bufferData(gl.ARRAY_BUFFER, lpos, gl.DYNAMIC_DRAW); O.n = lpos.length / 2; O.color = color; this.dirty();
+  }
   setHighlight(lpos, color = [1, 0.85, 0.2, 1]) {
     const gl = this.gl;
     if (!lpos || !lpos.length) { this.highlight = null; this.dirty(); return; }
@@ -278,6 +285,11 @@ export class MapRenderer {
       if (!L.visible || c.s < L.minS * this.dpr) continue;
       this._attr(P, 'a_pos', L.buf, 2); gl.uniform4fv(P.u.u_color, L.color);
       for (const o of offs) { this._common(P, o); gl.drawArrays(gl.LINES, 0, L.n); }
+    }
+    for (const O of Object.values(this.overlays || {})) {
+      this._attr(P, 'a_pos', O.buf, 2); gl.uniform4fv(P.u.u_color, O.color);
+      const d = this.dpr * 0.75;
+      for (const o of offs) for (const sh of [[0, 0], [d, 0], [0, d], [d, d]]) { this._common(P, o, sh); gl.drawArrays(gl.LINES, 0, O.n); }
     }
     if (this.highlight) {
       this._attr(P, 'a_pos', this.hbuf, 2); gl.uniform4fv(P.u.u_color, this.highlight.color);

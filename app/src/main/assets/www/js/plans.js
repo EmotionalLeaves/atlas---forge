@@ -133,11 +133,12 @@ export function districtVotes(W, p, nation) {
 }
 
 // Paint helpers. Each returns list of [unit, oldValue] for undo.
-export function paintUnits(W, p, list, d, changes) {
+// noOverwrite: leave units that already belong to another district alone (Districtr's "forbid paint-over")
+export function paintUnits(W, p, list, d, changes, noOverwrite = false) {
   for (const u of list) {
     if (u < 0 || u >= p.assign.length || !eligible(W, p, u)) continue;
     const old = p.assign[u]; if (old === d) continue;
-    if (old >= 0 && p.locked[old]) continue;
+    if (old >= 0 && (p.locked[old] || (noOverwrite && d >= 0))) continue;
     if (changes && !changes.has(u)) changes.set(u, old);
     p.assign[u] = d;
   }
@@ -228,3 +229,51 @@ export function randomPlan(W, p) {
 
 // Centre (lng, lat) of a cell / province / county.
 export function unitCenter(W, unit, u) { return unitXY(W, { unit })(u); }
+
+// Units sharing a "parent" area with u: cells -> province, counties -> state, provinces -> country.
+export function parentUnits(W, p, u, provCells) {
+  const D = W.D;
+  if (p.unit === 'cells') {
+    const pr = D.cells.admin1[u]; if (!pr || !provCells) return [u];
+    const out = []; for (let k = provCells.start[pr]; k < provCells.start[pr + 1]; k++) out.push(provCells.items[k]); return out;
+  }
+  if (p.unit === 'counties') {
+    if (!D._byState) { D._byState = new Map(); D.units.counties.forEach((c, k) => { let a = D._byState.get(c.s); if (!a) D._byState.set(c.s, a = []); a.push(k); }); }
+    return D._byState.get(D.units.counties[u].s) || [u];
+  }
+  if (!D._byCountry) { D._byCountry = new Map(); D.units.provinces.forEach((c, k) => { let a = D._byCountry.get(c.c); if (!a) D._byCountry.set(c.c, a = []); a.push(k); }); }
+  return D._byCountry.get(D.units.provinces[u].c) || [u];
+}
+export const PARENT_NAME = { cells: 'province', counties: 'state', provinces: 'country' };
+
+// How many parent areas (provinces / states / countries) are split between districts.
+export function planSplits(W, p, provCells) {
+  const seen = new Map(); let parents = 0, split = 0;
+  const parentOf = p.unit === 'cells' ? (u) => W.D.cells.admin1[u] : p.unit === 'counties' ? (u) => W.D.units.counties[u].s : (u) => W.D.units.provinces[u].c;
+  for (let u = 0; u < p.assign.length; u++) {
+    const d = p.assign[u]; if (d < 0) continue; const k = parentOf(u); if (!k) continue;
+    let st = seen.get(k); if (!st) { st = new Set(); seen.set(k, st); }
+    st.add(d);
+  }
+  for (const st of seen.values()) { parents++; if (st.size > 1) split++; }
+  return { parents, split };
+}
+
+// Districtr-compatible CSV import: first column = unit id (GEOID/FIPS for counties, ISO code or name for provinces, "lat,lng" not supported), last column = district number.
+export function importCSV(W, p, text) {
+  const lines = text.trim().split(/\r?\n/); let ok = 0, bad = 0;
+  const U = W.D.units; const idx = new Map();
+  if (p.unit === 'counties') U.counties.forEach((c, k) => idx.set(String(c.fips).padStart(5, '0'), k));
+  else if (p.unit === 'provinces') U.provinces.forEach((c, k) => { if (c.iso) idx.set(c.iso.toLowerCase(), k); idx.set(c.n.toLowerCase(), k); });
+  for (const line of lines) {
+    const f = line.split(',').map((x) => x.replace(/^"|"$/g, '').trim()); if (f.length < 2) continue;
+    const d = parseInt(f[f.length - 1], 10); if (!(d >= 1)) continue;
+    let u;
+    if (p.unit === 'cells') { const lat = parseFloat(f[0]), lng = parseFloat(f[1]); if (!isFinite(lat) || !isFinite(lng)) { bad++; continue; } const x = Math.floor((lng + 180) / 360 * W.Wd), y = Math.floor((90 - lat) / 180 * W.Hd); u = y * W.Wd + x; }
+    else { const key = p.unit === 'counties' ? f[0].padStart(5, '0').slice(-5) : f[0].toLowerCase(); u = idx.get(key); }
+    if (u == null || u < 0 || u >= p.assign.length) { bad++; continue; }
+    if (d > p.n) setDistrictCount(p, d);
+    p.assign[u] = d - 1; ok++;
+  }
+  return { ok, bad };
+}
