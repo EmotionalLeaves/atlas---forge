@@ -9,8 +9,8 @@ const cellLng = (W, i) => -180 + ((i % W.Wd) + 0.5) * 360 / W.Wd;
 export function buildCatalog(app) {
   const W = app.W, D = W.D, U = D.units, C = D.cells, nat = W.nations;
   const T = [];
-  const add = (t) => { T.push(t); return t; };
-  const nationCat = { kind: 'cat', catColor: (c) => nat[c] ? nat[c].color : [60, 60, 60], catLabel: (c) => nat[c] ? nat[c].name : 'Unclaimed' };
+  const add = (t) => { if (t.group === 'Real world (2026 data)' || ['p_name','p_pop','p_area','p_dens','p_country','p_type','p_region','k_name','k_pop','k_dens','k_area','k_state','k_min','k_blk','k_his','terrain','climate','rivers','lat','lng'].includes(t.id)) t.static = true; T.push(t); return t; };
+  const nationCat = { kind: 'cat', catColor: (c) => nat[c] ? nat[c].color : [178, 186, 198], catLabel: (c) => nat[c] ? nat[c].name : 'Unclaimed' };
   const cc = (i) => U.countries[C.country[i] - 1];
   const strCat = (getter) => { const map = new Map(), labels = []; return { kind: 'cat', value: (i) => { const s = getter(i); if (s == null || s === '') return 0; let k = map.get(s); if (!k) { k = labels.length + 1; map.set(s, k); labels.push(s); } return k; }, catLabel: (k) => labels[k - 1] || '—', catColor: (k) => catColor(k * 3 + 1) }; };
 

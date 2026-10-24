@@ -1,13 +1,14 @@
 // Atlas Forge — UI panels.
 import { h, fmt, pct, dateOf, esc, hex, parseHex, hsl, clamp, PARTY_COLORS, rampLUT, RAMPS } from './util.js';
-import { app, setTheme, refresh, theme, plan, select, undoRedo, scheduleStats, computePlanStats, rebuildCatalog, setWorld, step, autosave } from './app.js';
+import { app, setTheme, refresh, theme, plan, select, undoRedo, scheduleStats, computePlanStats, rebuildCatalog, setWorld, step, autosave, viewHistory, restoreHistory } from './app.js';
 import { rel, setRel, computeAggregates, computeAdjacency, newNation, cellLngLat, addNews, GOVS, prodOf, MAXN, warBetween } from './world.js';
 import { declareWar, endWar, annex, DISASTERS } from './sim.js';
-import { newPlan, setDistrictCount, autoFill, randomPlan, UNIT_TYPES, planStats } from './plans.js';
+import { newPlan, setDistrictCount, autoFill, randomPlan, UNIT_TYPES, planStats, unitCenter } from './plans.js';
 import { FORMULA_VARS, compileFormula, unitAgg } from './themes.js';
 import { listSlots, getSlot, putSlot, delSlot, serialize, deserialize, exportBlob, importBlob } from './store.js';
 import { createWorld } from './world.js';
 import { mercX, mercY } from './gl.js';
+import { cellAt } from './world.js';
 
 const $ = (s) => document.querySelector(s);
 let infoOpen = false;
@@ -21,6 +22,8 @@ const ICON = {
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   minus: '<svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>',
   home: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/></svg>',
+  search: '<svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg>',
+  trophy: '<svg viewBox="0 0 24 24"><path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H4c0 3 2 5 4 5M16 6h4c0 3-2 5-4 5M12 13v4M8 20h8"/></svg>',
 };
 const icon = (k) => h('span', { class: 'ic', html: ICON[k] });
 
@@ -32,9 +35,18 @@ export function init() {
   $('#menuBtn').innerHTML = ICON.menu; $('#menuBtn').onclick = openMenu;
   $('#themeBtn').onclick = openThemeBrowser;
   const fl = $('#floating');
-  fl.append(h('button', { class: 'fab', onclick: () => app.R.zoomAt(app.R.vw / app.R.dpr / 2, app.R.vh / app.R.dpr / 2, 2), html: ICON.plus }),
-    h('button', { class: 'fab', onclick: () => app.R.zoomAt(app.R.vw / app.R.dpr / 2, app.R.vh / app.R.dpr / 2, 0.5), html: ICON.minus }),
-    h('button', { class: 'fab', onclick: () => { app.R.cam = { x: 0.5, y: 0.42, s: 0 }; app.R.clampCam(); app.R.dirty(); }, html: ICON.home }));
+  fl.append(h('button', { class: 'fab', 'aria-label': 'Search places', onclick: openSearch, html: ICON.search }),
+    h('button', { class: 'fab', 'aria-label': 'Zoom in', onclick: () => app.R.zoomAt(...app.R.visibleCenter, 2), html: ICON.plus }),
+    h('button', { class: 'fab', 'aria-label': 'Zoom out', onclick: () => app.R.zoomAt(...app.R.visibleCenter, 0.5), html: ICON.minus }),
+    h('button', { class: 'fab', 'aria-label': 'Whole world', onclick: () => app.R.flyTo(15, 25, 1), html: ICON.home }));
+  // keep track of how much of the map the sheet covers so the camera frames the visible part
+  const sheet = $('#sheet');
+  const updPad = () => {
+    const r = sheet.getBoundingClientRect(), wide = window.innerWidth >= 760;
+    app.R.pad = wide ? { l: r.right, b: 0 } : { l: 0, b: Math.max(0, window.innerHeight - r.top) };
+  };
+  if (window.ResizeObserver) new ResizeObserver(updPad).observe(sheet);
+  window.addEventListener('resize', updPad); sheet.addEventListener('transitionend', updPad); updPad();
   $('#sheet .grab').onclick = () => $('#sheet').classList.toggle('collapsed');
   window.atlasBack = () => {
     if (!$('#modal').classList.contains('hidden')) { closeModal(); return true; }
@@ -50,6 +62,7 @@ export function setMode(m) {
   if (m === 'draw' && app.mode !== 'draw') { app.tool = plan() ? 'brush' : 'pan'; }
   else if (m !== 'draw' && m !== 'edit') app.tool = 'pan';
   if (m === 'edit' && app.mode !== 'edit') app.tool = 'pan';
+  if (m !== 'sim' && app.histOwner) viewHistory(null);
   app.mode = m;
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
   document.body.dataset.mode = m;
@@ -58,7 +71,7 @@ export function setMode(m) {
   refresh(); refreshPanels();
 }
 
-export const dateLabel = () => dateOf(app.W.month, app.W.startYear);
+export const dateLabel = () => app.histOwner ? `Borders of ${app.W.startYear + Math.floor(app.histMonth / 12)}` : dateOf(app.W.month, app.W.startYear);
 export function toast(text, ms = 2600) {
   const t = $('#toast'); t.textContent = text; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms);
 }
@@ -80,6 +93,8 @@ function swatchBg(t) { const r = RAMPS[t.ramp || 'viridis']; return t.kind === '
 export function onTick() {
   $('#date').textContent = dateLabel();
   if (app.mode === 'sim') {
+    const yr = Math.floor(app.W.month / 12);
+    if (yr !== app._shownYear && !document.activeElement?.matches('input,select,textarea')) { app._shownYear = yr; refreshPanels(); return; }
     const ws = $('#worldStats'); if (ws) ws.replaceWith(worldStats());
     const ic = $('#infoCard'); if (ic && app.sel) ic.replaceWith(infoCard());
   }
@@ -97,7 +112,12 @@ const section = (title, ...kids) => h('div', { class: 'sec' }, title ? h('div', 
 const dot = (c) => h('span', { class: 'dot', style: { background: hex(c) } });
 
 function legendEl() {
-  const L = app.legend; const t = theme(); if (!L || t.noLegend) return h('div', { class: 'legend muted' }, t.desc || 'Each colour is a different area');
+  const L = app.legend; const t = theme();
+  if (t.id === 'nations' || t.id === 'c_country') {
+    const W = app.W, alive = W.nations.filter((n) => n && n.alive && n.cells > 0).length;
+    return h('div', { class: 'legend nat' }, h('span', null, t.id === 'nations' ? `${alive} nations today${W.wars.length ? ` · ${W.wars.length} at war` : ''}` : `${W.D.units.countries.length} countries as of 2026`), btn('Rankings ›', () => openRankings('pop'), 'sm'));
+  }
+  if (!L || t.noLegend) return h('div', { class: 'legend muted' }, t.desc || 'Each colour is a different area');
   if (L.type === 'ramp') {
     const c = h('canvas', { width: 256, height: 1, class: 'ramp' }); const x = c.getContext('2d'); const img = x.createImageData(256, 1); const lut = rampLUT(L.ramp);
     for (let i = 0; i < 256; i++) { const k = L.invert ? 255 - i : i; img.data.set([lut[k * 3], lut[k * 3 + 1], lut[k * 3 + 2], 255], i * 4); } x.putImageData(img, 0, 0);
@@ -110,7 +130,21 @@ function quickThemes(ids) {
 }
 
 // ------------------------------------------------------------------ explore
+function welcomeCard() {
+  let seen = false; try { seen = localStorage.getItem('af_welcome') === '1'; } catch {}
+  if (seen) return null;
+  const close = () => { try { localStorage.setItem('af_welcome', '1'); } catch {} refreshPanels(); };
+  return h('div', { class: 'card welcome' }, h('button', { class: 'x', onclick: close }, '×'),
+    h('h3', null, 'Welcome to Atlas Forge'),
+    h('div', { class: 'tips' },
+      h('p', null, h('b', null, 'Explore'), ' — colour the real world by hundreds of maps. Tap anything for details; 🔍 finds any place.'),
+      h('p', null, h('b', null, 'Draw'), ' — paint your own districts from grid cells, provinces or US counties, like Districtr.'),
+      h('p', null, h('b', null, 'Simulate'), ' — press ▶ and history unfolds: wars, alliances, rebellions, elections.'),
+      h('p', null, h('b', null, 'God mode'), ' — repaint borders, rewrite data, declare wars, drop meteors.')),
+    btn('Got it', close, 'primary wide'));
+}
 function renderExplore(b) {
+  const wc = welcomeCard(); if (wc) b.append(wc);
   b.append(section(null, legendEl()));
   b.append(section('Quick maps', quickThemes([['nations', 'Nations'], ['density', 'Density'], ['dev', 'Development'], ['lean', 'Politics'], ['terrain', 'Terrain'], ['c_country', 'Real countries'], ['c_gdppc', 'Wealth'], ['p_name', 'Provinces'], ['k_pop', 'US counties'], ['climate', 'Climate']]),
     btn(`Browse all ${app.catalog.length.toLocaleString()} maps…`, openThemeBrowser, 'wide primary')));
@@ -203,7 +237,27 @@ export function zoomToNation(n) {
 // ------------------------------------------------------------------ simulate
 function worldStats() {
   const W = app.W; let pop = 0, alive = 0; for (const n of W.nations) if (n && n.alive) { pop += n.pop; alive++; }
-  return h('div', { id: 'worldStats', class: 'stats3' }, h('div', null, h('b', null, fmt(pop, 2)), h('small', null, 'people')), h('div', null, h('b', null, alive), h('small', null, 'nations')), h('div', { class: W.wars.length ? 'hot' : '' }, h('b', null, W.wars.length), h('small', null, 'wars')));
+  return h('div', { id: 'worldStats', class: 'stats3' },
+    h('button', { onclick: () => openRankings('pop') }, h('b', null, fmt(pop, 2)), h('small', null, 'people ›')),
+    h('button', { onclick: () => openRankings('gdp') }, h('b', null, alive), h('small', null, 'nations ›')),
+    h('button', { class: W.wars.length ? 'hot' : '', onclick: openWars }, h('b', null, W.wars.length), h('small', null, 'wars ›')));
+}
+function openWars() {
+  const W = app.W;
+  const body = h('div', { class: 'tlist' });
+  if (!W.wars.length) body.append(h('p', { class: 'muted' }, 'The world is at peace. Nations go to war when relations sour between neighbours — or declare one yourself in God mode → Diplomacy.'));
+  for (const w of W.wars) {
+    const A = W.nations[w.a], B = W.nations[w.b];
+    const lead = w.ga === w.gb ? 'Stalemate' : `${(w.ga > w.gb ? A : B).name} ahead`;
+    body.append(h('button', { class: 'titem', onclick: () => { closeModal(); select({ cell: B.capital, nation: B.id }); zoomBoth(A, B); setTheme('n_war'); } },
+      dot(A.color), h('span', null, `${A.name} vs ${B.name}`, h('small', { class: 'block' }, `Since ${dateOf(w.start, W.startYear)} · ${lead} · ${w.ga}–${w.gb} cells taken`)), dot(B.color)));
+  }
+  openModal('Wars', body);
+}
+function zoomBoth(A, B) {
+  const W = app.W; const lp = [A, B].map((n) => cellLngLat(W, n.capital >= 0 ? n.capital : n.topCell));
+  let [l1, a1] = lp[0], [l2, a2] = lp[1]; if (Math.abs(l1 - l2) > 180) { if (l1 < l2) l1 += 360; else l2 += 360; }
+  app.R.fitBounds(Math.min(l1, l2) - 8, Math.min(a1, a2) - 6, Math.max(l1, l2) + 8, Math.max(a1, a2) + 6);
 }
 function newsItem(n) {
   const W = app.W;
@@ -213,10 +267,23 @@ function newsItem(n) {
 function renderSim(b) {
   const W = app.W;
   b.append(h('div', { class: 'simbar' },
-    h('button', { class: 'play' + (app.running ? ' on' : ''), onclick: () => { app.running = !app.running; if (!app.running) autosave(); refreshPanels(); } }, app.running ? '❚❚' : '▶'),
+    h('button', { class: 'play' + (app.running ? ' on' : ''), onclick: () => { if (app.histOwner) viewHistory(null); app.running = !app.running; if (!app.running) autosave(); refreshPanels(); } }, app.running ? '❚❚' : '▶'),
     seg([[1, '1×'], [2, '4×'], [3, '12×'], [4, 'Max']], app.speed, (v) => { app.speed = v; if (!app.running) app.running = true; refreshPanels(); }),
     h('button', { class: 'btn', onclick: () => step(12) }, '+1 yr')));
   b.append(worldStats());
+  const T = W.timeline;
+  if (T && T.deltas.length) {
+    const stops = [T.start, ...T.deltas.map((d) => d.m).filter((m) => m < W.month), W.month];
+    const cur = app.histOwner ? Math.max(0, stops.findIndex((m) => m >= app.histMonth)) : stops.length - 1;
+    const yr = (m) => W.startYear + Math.floor(m / 12);
+    const lab = h('b', null, app.histOwner ? yr(stops[cur]) : 'Now');
+    b.append(h('div', { class: 'card slim history' + (app.histOwner ? ' on' : '') },
+      h('label', { class: 'slider' }, 'History', h('input', { type: 'range', min: 0, max: stops.length - 1, step: 1, value: cur,
+        oninput: (e) => { const k = +e.target.value; lab.textContent = k === stops.length - 1 ? 'Now' : yr(stops[k]); viewHistory(k === stops.length - 1 ? null : stops[k]); $('#date').textContent = dateLabel(); },
+        onchange: () => refreshPanels() }), lab),
+      app.histOwner ? h('div', { class: 'btns' }, btn('Back to the present', () => { viewHistory(null); refreshPanels(); }),
+        btn('Restore these borders', () => { if (confirm(`Reset every border to how it was in ${yr(app.histMonth)}? Populations and the date stay as they are.`)) { restoreHistory(); refreshPanels(); toast('Borders restored'); } }, 'danger')) : null));
+  }
   b.append(section(null, quickThemes([['nations', 'Nations'], ['n_war', 'Wars'], ['n_bloc', 'Alliances'], ['n_stab', 'Stability'], ['n_ruling', 'Governing party'], ['n_gov', 'Governments'], ['occupied', 'Occupation'], ['growth', 'Growth'], ['dev', 'Development'], ['lean', 'Politics']])));
   if (!infoOpen) b.append(h('p', { class: 'muted small' }, 'Tap a nation to follow it. Wars, alliances, rebellions, coups and elections happen on their own — or force them in God mode.'));
   const feed = h('div', { id: 'news' }, W.news.slice(0, 40).map(newsItem));
@@ -261,10 +328,22 @@ function renderDraw(b) {
       row('Unassigned', `${fmt(st.unassignedPop)} people (${st.unassignedUnits.toLocaleString()} ${p.unit === 'cells' ? 'cells' : 'units'})`),
       row('Largest deviation', pct(st.maxDev, 1)),
       h('div', { class: 'kv' }, h('span', null, 'Seats'), h('span', { class: 'seats' }, st.seats.map((n, k) => h('b', { style: { color: hex(PARTY_COLORS[k]) } }, `${n} ${['L', 'C', 'R'][k]}`)))),
+      st.contested ? fairness(st, true) : null,
       h('div', { class: 'muted small' }, scopeLabel(p))));
   }
 }
 const scopeLabel = (p) => `${UNIT_TYPES[p.unit]} · ${p.scope ? app.W.D.units.countries[p.scope - 1].name : 'whole world'} · ${p.n} districts${p.electionsUse && p.scope ? ' · used in this country\'s elections' : ''}`;
+function egText(eg) { const a = Math.abs(eg); return a < 0.02 ? 'balanced' : `${(a * 100).toFixed(1)}% toward ${eg > 0 ? 'Right' : 'Left'}`; }
+function fairness(st, compact) {
+  const seatsPct = st.seats.map((v) => v / Math.max(1, st.contested));
+  const rows = [
+    h('div', { class: 'vs' }, h('small', null, 'Votes'), voteBar(st.voteShare, st.parties)),
+    h('div', { class: 'vs' }, h('small', null, 'Seats'), voteBar(seatsPct, st.parties)),
+    row('Efficiency gap', egText(st.eg)),
+  ];
+  if (!compact) rows.push(row('Mean–median (Left share)', (st.meanMedian >= 0 ? '+' : '') + (st.meanMedian * 100).toFixed(1) + ' pts'), row('Competitive districts (<10% margin)', `${st.competitive} of ${st.contested}`));
+  return h('div', { class: 'fair' }, rows);
+}
 function voteBar(shares, parties) {
   return h('div', { class: 'votebar' }, shares.map((s, k) => h('i', { style: { width: (s * 100) + '%', background: hex(PARTY_COLORS[k]) }, title: parties[k].name || '' }, s > 0.12 ? Math.round(s * 100) + '%' : '')));
 }
@@ -325,7 +404,8 @@ function openStats() {
       h('td', null, h('span', { class: 'dot', style: { background: hex(p.colors[d.k]) } }), d.k + 1), h('td', null, fmt(d.pop)), h('td', { class: Math.abs(d.dev) > 0.05 ? 'bad' : '' }, d.units ? (d.dev * 100).toFixed(1) + '%' : '—'),
       h('td', null, d.units ? d.pp.toFixed(2) : '—'), h('td', { class: d.pieces > 1 ? 'bad' : '' }, d.pieces || '—'),
       h('td', null, d.winner >= 0 ? h('b', { style: { color: hex(PARTY_COLORS[d.winner]) } }, ['Left', 'Centre', 'Right'][d.winner] + ' ' + Math.round(d.shares[d.winner] * 100) + '%') : '—'))));
-  openModal('District statistics', h('div', { class: 'scrollx' }, tbl), true);
+  const help = h('p', { class: 'muted small' }, 'Efficiency gap counts “wasted” votes (votes for losers, plus winners\' votes beyond what they needed); a gap above ~7% is usually considered a sign of gerrymandering. Mean–median compares the Left party\'s median district to its average; a negative number means the map packs or cracks Left voters.');
+  openModal('District statistics', h('div', null, st.contested ? fairness(st, false) : null, help, h('div', { class: 'scrollx' }, tbl)), true);
 }
 export function refreshStats() { if (app.mode === 'draw' && !document.activeElement?.matches('input,select')) refreshPanels(); }
 
@@ -529,4 +609,60 @@ export async function saveFile(name, blob) {
     toast(where ? 'Saved to ' + where : 'Could not save file', 4000); return;
   }
   const a = h('a', { href: URL.createObjectURL(blob), download: name }); document.body.append(a); a.click(); a.remove();
+}
+
+// ------------------------------------------------------------------ place search
+export function openSearch() {
+  const W = app.W, U = W.D.units;
+  const list = h('div', { class: 'tlist' });
+  const hint = h('p', { class: 'muted small' }, 'Type at least 2 letters. Searches nations, real countries, 4,596 provinces, 3,221 US counties and 7,300 cities.');
+  const input = h('input', { class: 'search', placeholder: 'Search places…', oninput: () => draw(input.value) });
+  const kinds = { Nation: 0, Country: 1, City: 2, Province: 3, County: 4 };
+  function draw(q) {
+    list.innerHTML = ''; q = q.trim().toLowerCase();
+    if (q.length < 2) { list.append(hint); return; }
+    const res = [];
+    const sc = (name) => { const n = String(name || '').toLowerCase(); return n === q ? 0 : n.startsWith(q) ? 1 : n.includes(' ' + q) ? 2 : n.includes(q) ? 3 : -1; };
+    const add = (kind, name, sub, score, weight, go, color) => { if (score >= 0) res.push({ kind, name, sub, score, weight, go, color }); };
+    const aliveNames = new Set();
+    for (const n of W.nations) if (n && n.alive) { aliveNames.add(n.name); add('Nation', n.name, `${n.gov} · ${fmt(n.pop)} people`, sc(n.name), n.pop, () => { select({ cell: n.capital, nation: n.id }); zoomToNation(n); showInfo(); }, n.color); }
+    U.countries.forEach((c, k) => { if (aliveNames.has(c.name)) return; add('Country', c.name, `2026 · ${c.continent}`, sc(c.name), c.pop, () => { app.R.flyTo(c.label[0], c.label[1], 2400); const i = cellAt(W, c.label[0], c.label[1]); select({ cell: i, nation: W.owner[i] }); showInfo(); }); });
+    U.cities.forEach((c) => add('City', c.name, `${U.countries[c.country - 1] ? U.countries[c.country - 1].name : ''} · ${fmt(c.pop)}`, sc(c.name), c.pop, () => { app.R.flyTo(c.lng, c.lat, 9000); const i = cellAt(W, c.lng, c.lat); select({ cell: i, nation: W.owner[i] }); showInfo(); }));
+    U.provinces.forEach((p, u) => add('Province', p.n, `${p.t || 'Province'} · ${U.countries[p.c - 1] ? U.countries[p.c - 1].name : ''}`, sc(p.n), p.pop, () => goUnit('provinces', u, 4000)));
+    U.counties.forEach((c, u) => add('County', `${c.n}, ${c.s}`, `US county · ${fmt(c.pop)}`, sc(`${c.n}, ${c.s}`), c.pop, () => goUnit('counties', u, 6000)));
+    res.sort((a, b) => a.score - b.score || kinds[a.kind] - kinds[b.kind] || b.weight - a.weight);
+    for (const r of res.slice(0, 60)) list.append(h('button', { class: 'titem', onclick: () => { closeModal(); r.go(); } },
+      r.color ? dot(r.color) : h('span', { class: 'kind' }, r.kind[0]), h('span', null, r.name, h('small', { class: 'block' }, r.sub)), h('small', null, r.kind)));
+    if (!res.length) list.append(h('p', { class: 'muted' }, 'Nothing found.'));
+  }
+  draw('');
+  openModal('Find a place', h('div', null, input, list));
+  setTimeout(() => input.focus(), 60);
+}
+function goUnit(layer, u, zoom) {
+  const W = app.W, [lng, lat] = unitCenter(W, layer, u);
+  app.R.flyTo(lng, lat, zoom);
+  const i = cellAt(W, lng, lat);
+  select({ unit: u, layer, cell: i, nation: W.owner[i] }); showInfo();
+}
+
+// ------------------------------------------------------------------ rankings
+const RANKS = [
+  ['pop', 'Population', (n) => n.pop, (v) => fmt(v)],
+  ['gdp', 'GDP', (n) => n.gdp * 1e6, (v) => '$' + fmt(v)],
+  ['gdppc', 'Income', (n) => n.pop ? n.gdp * 1e6 / n.pop : 0, (v) => '$' + fmt(v)],
+  ['cells', 'Territory', (n) => n.cells, (v) => fmt(v) + ' cells'],
+  ['mil', 'Military', (n) => n.mil, (v) => fmt(v)],
+  ['stab', 'Stability', (n) => n.stab, (v) => pct(v)],
+  ['growth', 'Growth', (n) => n.hist && n.hist.pop[0] ? n.pop / n.hist.pop[0] - 1 : 0, (v) => (v >= 0 ? '+' : '') + pct(v)],
+];
+export function openRankings(key = 'pop') {
+  const W = app.W, R = RANKS.find((r) => r[0] === key) || RANKS[0];
+  const alive = W.nations.filter((n) => n && n.alive && n.cells > 0).map((n) => [n, R[2](n)]).sort((a, b) => b[1] - a[1]);
+  const max = Math.max(...alive.map((a) => Math.abs(a[1]))) || 1;
+  const body = h('div', null,
+    h('div', { class: 'chips' }, RANKS.map(([k, l]) => h('button', { class: 'chip-s' + (k === R[0] ? ' on' : ''), onclick: () => openRankings(k) }, l))),
+    h('div', { class: 'tlist' }, alive.slice(0, 200).map(([n, v], k) => h('button', { class: 'titem rank', onclick: () => { closeModal(); select({ cell: n.capital, nation: n.id }); zoomToNation(n); showInfo(); } },
+      h('b', { class: 'rk' }, k + 1), dot(n.color), h('span', null, n.name, h('i', { class: 'rbar', style: { width: Math.max(2, Math.abs(v) / max * 100) + '%', background: hex(n.color) } })), h('small', null, R[3](v))))));
+  openModal(`Rankings · ${dateLabel()}`, body);
 }

@@ -1,7 +1,7 @@
 // Atlas Forge — core: rendering pipeline, input, painting, labels.
 import { MapRenderer, mercX, mercY, unMercX, unMercY } from './gl.js';
 import { loadData } from './data.js';
-import { createWorld, computeAggregates, computeAdjacency, cellAt, cellLngLat, addNews, newNation } from './world.js';
+import { createWorld, computeAggregates, computeAdjacency, cellAt, cellLngLat, addNews, newNation, ownerAt } from './world.js';
 import { tick, applyDisaster } from './sim.js';
 import { buildCatalog, colorize, unitAgg } from './themes.js';
 import { planStats, paintUnits, brushCells, floodUnits, eligible, districtVotes } from './plans.js';
@@ -74,6 +74,29 @@ function polyLayerShown() {
 
 // Recolour everything for the current mode / theme / plan.
 export function refresh() {
+  const W = app.W;
+  if (!app.histOwner) return refreshInner();
+  const real = W.owner; W.owner = app.histOwner;
+  try { refreshInner(); } finally { W.owner = real; }
+}
+// Show the borders as they were at month m (null = the present).
+export function viewHistory(m) {
+  const W = app.W;
+  if (m == null || m >= W.month || !W.timeline) { app.histOwner = null; app.histMonth = null; }
+  else { app.histOwner = ownerAt(W, m); app.histMonth = m; app.running = false; }
+  refresh();
+}
+// Make the borders shown in the history view the real, current borders.
+export function restoreHistory() {
+  const W = app.W; if (!app.histOwner) return;
+  W.owner.set(app.histOwner);
+  for (const n of W.nations) if (n) n.alive = false;
+  app.histOwner = null; app.histMonth = null;
+  computeAggregates(W); computeAdjacency(W);
+  W.wars = W.wars.filter((w) => W.nations[w.a].alive && W.nations[w.b].alive);
+  app.aggStamp++; rebuildCatalog(); refresh();
+}
+function refreshInner() {
   const W = app.W, D = app.D, t = theme(), land = W.land, N = W.N;
   const poly = polyLayerShown(), p = app.mode === 'draw' ? plan() : null;
   const base = app.baseRGBA, out = app.cellRGBA, grp = app.groupRGBA;
@@ -135,7 +158,10 @@ function overlayPlanUnits(p, arr) {
 export function refreshCells(list) {
   if (app.cellColorOne) for (const i of list) app.cellColorOne(i, app.baseRGBA);
   composeCells(list);
-  app.R.setCellColors(app.cellRGBA); app.R.setCellGroups(app.groupRGBA);
+  // neighbours' border pixels depend on these cells too, so widen by one row
+  let y0 = Infinity, y1 = -1; for (const i of list) { const y = (i / app.W.Wd) | 0; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (y1 < 0) return;
+  app.R.setCellRows(app.cellRGBA, app.groupRGBA, Math.max(0, y0 - 1), Math.min(app.W.Hd - 1, y1 + 1));
 }
 
 // ---------------------------------------------------------------- cities & labels
@@ -166,14 +192,28 @@ function drawLabels(ctx, R) {
   const p = app.mode === 'draw' ? plan() : null;
   if (p && app.planCentroids) for (const c of app.planCentroids) { if (!c) continue; const [x, y] = R.worldToScreen(c[0], c[1]); label(String(c[2] + 1), x, y, 15, '#fff', 800); }
   if (!app.show.labels) return;
+  // province / county names when zoomed in
+  const poly = polyLayerShown();
+  if (poly) {
+    const C = unitCenters(poly), units = poly === 'provinces' ? app.D.units.provinces : app.D.units.counties;
+    let drawn = 0;
+    for (const u of C.order) {
+      const lat = unMercY(C.y[u]), pxKm = scale / (40075 * Math.cos(lat * Math.PI / 180));
+      const span = Math.sqrt(units[u].area || 0) * pxKm; if (span < 40) continue;
+      const [x, y] = R.worldToScreen(C.x[u], C.y[u]);
+      if (x < -60 || x > vw + 60 || y < -20 || y > vh + 20) continue;
+      if (label(units[u].n, x, y, clamp(span / 9, 10, 15), '#f7f3ea', 600)) drawn++;
+      if (drawn > 160) break;
+    }
+  }
   // nations
   if (theme().layer === 'cells' && app.mode !== 'draw') {
-    const list = W.nations.filter((n) => n && n.alive && n.cells > 0).sort((a, b) => b.cells - a.cells);
-    const pos = labelPositions();
+    const { pos, cnt } = labelPositions();
+    const list = W.nations.filter((n) => n && cnt[n.id] > 0).sort((a, b) => cnt[b.id] - cnt[a.id]);
     for (const n of list) {
-      const span = Math.sqrt(n.cells) * cellPx; if (span < 26) continue;
+      const span = Math.sqrt(cnt[n.id]) * cellPx; if (span < 26) continue;
       const size = clamp(span / 7, 10, 26);
-      const lp = pos[n.id] || [n.cx, n.cy];
+      const lp = pos[n.id]; if (!lp) continue;
       const lat = 90 - (lp[1] + 0.5) * 180 / W.Hd, wx = (lp[0] + 0.5) / W.Wd, wy = mercY(lat);
       const [x, y] = R.worldToScreen(wx, wy);
       label(n.name.length > 22 && size < 14 ? (n.a3 || n.name.slice(0, 12)) : n.name, x, y, size, n.id === (app.sel && app.sel.nation) ? '#ffd65a' : '#f4f1ea', 700);
@@ -191,20 +231,39 @@ function drawLabels(ctx, R) {
   }
 }
 
+// Mercator centre of every province / county (vertex mean), largest first.
+const ucCache = {};
+function unitCenters(layer) {
+  if (ucCache[layer]) return ucCache[layer];
+  const g = layer === 'provinces' ? app.D.geom.prov : app.D.geom.county, units = layer === 'provinces' ? app.D.units.provinces : app.D.units.counties;
+  const n = units.length, x = new Float64Array(n), y = new Float64Array(n), c = new Float64Array(n);
+  for (let v = 0; v < g.uid.length; v++) { const u = g.uid[v]; x[u] += g.pos[v * 2]; y[u] += g.pos[v * 2 + 1]; c[u]++; }
+  for (let u = 0; u < n; u++) if (c[u]) { x[u] /= c[u]; y[u] /= c[u]; }
+  const order = [...units.keys()].filter((u) => c[u]).sort((a, b) => (units[b].area || 0) - (units[a].area || 0));
+  return (ucCache[layer] = { x, y, order });
+}
+
 // Label anchor per nation: centroid of its land near the capital (ignores far-flung islands/colonies).
 let lpCache = null, lpStamp = -1;
 function labelPositions() {
-  const W = app.W; if (lpCache && lpStamp === app.aggStamp) return lpCache;
+  const W = app.W, stamp = app.aggStamp + ':' + app.histMonth; if (lpCache && lpStamp === stamp) return lpCache;
+  const owner = app.histOwner || W.owner;
   const nn = W.nations.length, sx = new Float64Array(nn), sy = new Float64Array(nn), c = new Float64Array(nn), R2 = new Float64Array(nn), cx = new Float64Array(nn), cy = new Float64Array(nn);
-  for (let o = 1; o < nn; o++) { const n = W.nations[o]; if (!n.alive || n.capital < 0) continue; cx[o] = n.capital % W.Wd; cy[o] = (n.capital / W.Wd) | 0; const r = 2.2 * Math.sqrt(n.cells) + 4; R2[o] = r * r; }
+  const cnt = new Int32Array(nn), anyCell = new Int32Array(nn).fill(-1);
+  for (const i of W.land) { const o = owner[i]; if (o) { cnt[o]++; if (anyCell[o] < 0 || W.pop[i] > W.pop[anyCell[o]]) anyCell[o] = i; } }
+  for (let o = 1; o < nn; o++) {
+    const n = W.nations[o]; if (!cnt[o]) continue;
+    const capOk = n.capital >= 0 && owner[n.capital] === o, cc = capOk ? n.capital : anyCell[o];
+    cx[o] = cc % W.Wd; cy[o] = (cc / W.Wd) | 0; const r = 2.2 * Math.sqrt(cnt[o]) + 4; R2[o] = r * r;
+  }
   for (const i of W.land) {
-    const o = W.owner[i]; if (!o || !R2[o]) continue;
+    const o = owner[i]; if (!o || !R2[o]) continue;
     const y = (i / W.Wd) | 0; let dx = (i - y * W.Wd) - cx[o]; if (dx > W.Wd / 2) dx -= W.Wd; else if (dx < -W.Wd / 2) dx += W.Wd;
     const dy = y - cy[o]; if (dx * dx + dy * dy > R2[o]) continue;
     sx[o] += dx; sy[o] += dy; c[o]++;
   }
-  lpCache = []; for (let o = 1; o < nn; o++) if (c[o]) lpCache[o] = [(cx[o] + sx[o] / c[o] + W.Wd) % W.Wd, cy[o] + sy[o] / c[o]];
-  lpStamp = app.aggStamp; return lpCache;
+  const pos = []; for (let o = 1; o < nn; o++) if (c[o]) pos[o] = [(cx[o] + sx[o] / c[o] + W.Wd) % W.Wd, cy[o] + sy[o] / c[o]];
+  lpCache = { pos, cnt }; lpStamp = stamp; return lpCache;
 }
 
 // ---------------------------------------------------------------- selection
@@ -437,7 +496,7 @@ function setupInput(el) {
 
 // ---------------------------------------------------------------- simulation loop
 const SPEEDS = [0, 1, 4, 12, 48];
-let acc = 0, lastT = 0, recolorAt = 0;
+let acc = 0, lastT = 0, recolorAt = 0, refreshCost = 30, pendingOwner = false;
 function simLoop(t) {
   requestAnimationFrame(simLoop);
   const dt = Math.min(0.25, (t - lastT) / 1000 || 0); lastT = t;
@@ -448,8 +507,13 @@ function simLoop(t) {
   if (acc > 3) acc = 0; // can't keep up: drop backlog
   if (!n) return;
   app.aggStamp++;
-  if (owner) rebuildCatalogLite();
-  if (t - recolorAt > 180 || owner) { recolorAt = t; refresh(); }
+  if (owner) { rebuildCatalogLite(); pendingOwner = true; }
+  // recolour at a pace the device can afford; maps that the sim can't change only need it when borders move
+  const th = theme(), gap = Math.max(250, refreshCost * 8);
+  if (t - recolorAt > gap && (pendingOwner || !th.static)) {
+    recolorAt = t; pendingOwner = false;
+    const r0 = performance.now(); refresh(); refreshCost = refreshCost * 0.7 + (performance.now() - r0) * 0.3;
+  }
   UI.onTick && UI.onTick();
 }
 export function step(months = 1) { for (let k = 0; k < months; k++) tick(app.W); app.aggStamp++; rebuildCatalogLite(); refresh(); UI.onTick && UI.onTick(); }

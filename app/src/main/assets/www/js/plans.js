@@ -108,7 +108,23 @@ export function planStats(W, p) {
     if (R.winner >= 0) seats[R.winner]++;
   }
   const devs = res.filter((r) => r.units).map((r) => Math.abs(r.dev));
-  return { districts: res, ideal, totalPop: totalElig, unassignedPop, unassignedUnits, seats, maxDev: devs.length ? Math.max(...devs) : 0, parties };
+  // partisan fairness (Left vs Right; Centre counted as votes but not in the two-party measures)
+  const V = [0, 0, 0], wasted = [0, 0, 0], lshare = []; let competitive = 0, contested = 0;
+  for (const R of res) {
+    const t = R.votes[0] + R.votes[1] + R.votes[2]; if (!t) continue; contested++;
+    for (let k = 0; k < 3; k++) V[k] += R.votes[k];
+    const sorted = [...R.votes].sort((a, b) => b - a), need = sorted[1];
+    for (let k = 0; k < 3; k++) wasted[k] += k === R.winner ? R.votes[k] - need : R.votes[k];
+    if ((sorted[0] - sorted[1]) / t < 0.1) competitive++;
+    if (R.votes[0] + R.votes[2] > 0) lshare.push(R.votes[0] / (R.votes[0] + R.votes[2]));
+  }
+  const VT = V[0] + V[1] + V[2] || 1;
+  const eg = (wasted[0] - wasted[2]) / VT; // > 0: Left wastes more votes -> map favours Right
+  lshare.sort((a, b) => a - b);
+  const mean = lshare.length ? lshare.reduce((a, b) => a + b, 0) / lshare.length : 0.5;
+  const median = lshare.length ? (lshare.length % 2 ? lshare[(lshare.length - 1) >> 1] : (lshare[lshare.length / 2 - 1] + lshare[lshare.length / 2]) / 2) : 0.5;
+  return { districts: res, ideal, totalPop: totalElig, unassignedPop, unassignedUnits, seats, maxDev: devs.length ? Math.max(...devs) : 0, parties,
+    voteShare: V.map((v) => v / VT), eg, meanMedian: median - mean, competitive, contested };
 }
 
 // Votes per district for a nation's election (used by the sim).
@@ -209,3 +225,6 @@ export function randomPlan(W, p) {
   }
   autoFill(W, p);
 }
+
+// Centre (lng, lat) of a cell / province / county.
+export function unitCenter(W, unit, u) { return unitXY(W, { unit })(u); }

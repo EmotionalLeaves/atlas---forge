@@ -144,7 +144,7 @@ details > summary { cursor: pointer; }
 .play.on { background: #2c3546; color: var(--accent2); }
 .simbar .seg { flex: 1; }
 .stats3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-.stats3 div { background: var(--panel2); border-radius: 12px; padding: 8px; text-align: center; }
+.stats3 > * { background: var(--panel2); border-radius: 12px; padding: 8px; text-align: center; }
 .stats3 b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
 .stats3 small { color: var(--muted); font-size: 11px; }
 .stats3 .hot b { color: #ff8f73; }
@@ -195,3 +195,21 @@ details > summary { cursor: pointer; }
 #loading .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
 #loading .msg { color: var(--muted); font-size: 13px; max-width: 80vw; text-align: center; }
 #loading.error .msg { color: #ff9b85; }
+
+.btn.sm { padding: 6px 10px; font-size: 13px; }
+.legend.nat { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+small.block { display: block; color: var(--muted); font-size: 12px; margin-top: 1px; }
+.titem > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.kind { width: 22px; height: 22px; border-radius: 6px; background: #273041; color: var(--muted); font-size: 11px; font-weight: 700; display: grid; place-items: center; flex: none; }
+.titem.rank .rk { width: 26px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.titem.rank span:nth-child(3) { flex: 1; position: relative; padding-bottom: 5px; }
+.rbar { position: absolute; left: 0; bottom: 0; height: 3px; border-radius: 2px; opacity: .85; }
+.titem .dot { flex: none !important; }
+.history.on { border-color: var(--accent); }
+.fair { margin-top: 8px; }
+.vs { display: grid; grid-template-columns: 44px 1fr; align-items: center; gap: 6px; }
+.vs small { color: var(--muted); font-size: 11px; }
+.vs .votebar { margin: 4px 0; height: 14px; }
+.welcome { border-color: rgba(242, 181, 68, .45); }
+.welcome .tips p { margin: 6px 0; font-size: 13px; color: var(--muted); }
+.welcome .tips b { color: var(--text); }

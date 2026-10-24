@@ -1,5 +1,5 @@
 // Saving worlds: IndexedDB slots + portable export files (.atlas, gzip).
-import { createWorld, computeAggregates, computeAdjacency, MAXN } from './world.js';
+import { createWorld, computeAggregates, computeAdjacency, initTimeline, MAXN } from './world.js';
 
 const DB = 'atlasforge', STORE = 'worlds';
 function db() {
@@ -41,6 +41,7 @@ export function serialize(W) {
     lean: onLand(W, W.lean, Float32Array), lean0: onLand(W, W.lean0, Float32Array), terrain: onLand(W, W.terrain, Uint8Array), custom,
     plans: W.plans.map((p) => ({ ...p, assign: p.unit === 'cells' ? onLand(W, p.assign, Int16Array) : p.assign.slice() })),
     aliveCount: W.nations.filter((n) => n && n.alive).length,
+    timeline: W.timeline ? { start: W.timeline.start, key: W.timeline.key, deltas: W.timeline.deltas } : null,
   };
 }
 
@@ -56,6 +57,10 @@ export function deserialize(D, S) {
   W.owner.fill(0); fromLand(W, S.owner, W.owner); fromLand(W, S.pop, W.pop); fromLand(W, S.pop0, W.pop0); fromLand(W, S.dev, W.dev); fromLand(W, S.lean, W.lean); if (S.lean0) fromLand(W, S.lean0, W.lean0); fromLand(W, S.terrain, W.terrain);
   W.custom = {}; for (const [k, v] of Object.entries(S.custom || {})) { const a = new Float32Array(W.N); fromLand(W, v, a); W.custom[k] = a; }
   W.plans = (S.plans || []).map((p) => { let assign; if (p.unit === 'cells') { assign = new Int16Array(W.N).fill(-1); fromLand(W, p.assign, assign); } else assign = Int16Array.from(p.assign); return { ...p, assign }; });
+  if (S.timeline && S.timeline.key && S.timeline.key.length === W.land.length) {
+    W.timeline = { start: S.timeline.start, key: Uint16Array.from(S.timeline.key), deltas: S.timeline.deltas.map((d) => ({ m: d.m, idx: Int32Array.from(d.idx), val: Uint16Array.from(d.val) })) };
+    W.tlLast = W.timeline.key.slice(); for (const d of W.timeline.deltas) for (let k = 0; k < d.idx.length; k++) W.tlLast[d.idx[k]] = d.val[k];
+  } else initTimeline(W);
   computeAggregates(W); computeAdjacency(W);
   return W;
 }

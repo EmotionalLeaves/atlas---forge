@@ -1,8 +1,8 @@
 // The world simulation: one tick = one month.
-import { LEAN_BINS, MAXN, HAB, GOVS, rel, setRel, pairKey, computeAggregates, computeAdjacency, snapshot, addNews, warBetween, newNation, cellLngLat } from './world.js';
+import { recordTimeline, LEAN_BINS, MAXN, HAB, GOVS, rel, setRel, pairKey, computeAggregates, computeAdjacency, snapshot, addNews, warBetween, newNation, cellLngLat } from './world.js';
 import { clamp, vnoise, hsl, rebelName, blocName } from './util.js';
 
-const GROW = Float32Array.from({ length: 1025 }, (_, k) => 0.019 * Math.pow(1 - k / 1024, 1.5) + 0.002);
+const GROW = Float32Array.from({ length: 1025 }, (_, k) => { const d = k / 1024; return 0.026 * (1 - d) * (1 - d) - 0.0042 * d + 0.0012; }); // demographic transition
 const GOV_STAB = { Republic: 0.04, Monarchy: 0.05, Autocracy: 0.02, Junta: -0.06, Provisional: -0.12 };
 
 export function tick(W) {
@@ -19,7 +19,7 @@ export function tick(W) {
     const i = land[k], p = pop[i]; if (p <= 0) continue;
     const o = owner[i], d = dev[i], row = (i / Wd) | 0;
     const hab = HAB[terr[i]] + ((flags[i] & 1) ? 0.4 : 0);
-    const cap = W.area[row] * hab * (40 + 900 * d) + 50;
+    const cap = W.pop0[i] * (1.15 + 0.6 * d) + W.area[row] * hab * (40 + 900 * d) + 50;
     let g = GROW[(d * 1024 + 0.5) | 0];
     g *= 1 - Math.min(1, 0.5 * p / cap);
     if (p > cap) g -= Math.min(0.03, 0.01 * (p / cap - 1));
@@ -70,6 +70,7 @@ export function tick(W) {
   if (W.month % 12 === 0) {
     computeAdjacency(W);
     for (let o = 1; o < nn; o++) if (nations[o].alive) snapshot(W, nations[o]);
+    recordTimeline(W);
     for (const [k, until] of Object.entries(W.truce)) if (until < W.month) delete W.truce[k];
   } else if (ev.owner && W.month % 3 === 0) computeAdjacency(W);
   return ev;

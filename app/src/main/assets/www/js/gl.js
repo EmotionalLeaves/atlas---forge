@@ -103,6 +103,13 @@ export class MapRenderer {
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.STATIC_DRAW); this.rasterCount = v.length / 4;
   }
   setCellColors(rgba) { const gl = this.gl; gl.bindTexture(gl.TEXTURE_2D, this.texColor); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gw, this.gh, gl.RGBA, gl.UNSIGNED_BYTE, rgba); this.dirty(); }
+  // upload only rows y0..y1 of both textures (fast path while painting)
+  setCellRows(colors, groups, y0, y1) {
+    const gl = this.gl, w = this.gw, a = y0 * w * 4, b = (y1 + 1) * w * 4;
+    gl.bindTexture(gl.TEXTURE_2D, this.texColor); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, y0, w, y1 - y0 + 1, gl.RGBA, gl.UNSIGNED_BYTE, colors.subarray(a, b));
+    gl.bindTexture(gl.TEXTURE_2D, this.texGroup); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, y0, w, y1 - y0 + 1, gl.RGBA, gl.UNSIGNED_BYTE, groups.subarray(a, b));
+    this.dirty();
+  }
   setCellGroups(rgba) { const gl = this.gl; gl.bindTexture(gl.TEXTURE_2D, this.texGroup); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gw, this.gh, gl.RGBA, gl.UNSIGNED_BYTE, rgba); this.dirty(); }
 
   // geom: {pos Float32Array, uid Uint16Array, idx Uint32Array, lpos Float32Array, luid Uint16Array}
@@ -148,7 +155,8 @@ export class MapRenderer {
   get maxScale() { return 256 * Math.pow(2, 13) * this.dpr; }
   clampCam() {
     const c = this.cam; c.s = Math.max(this.minScale, Math.min(this.maxScale, c.s));
-    const half = this.vh / 2 / c.s; c.y = half >= 0.5 ? 0.5 : Math.max(half, Math.min(1 - half, c.y));
+    const half = this.vh / 2 / c.s, pb = ((this.pad && this.pad.b) || 0) * this.dpr / c.s;
+    c.y = half >= 0.5 ? 0.5 + pb / 2 : Math.max(half, Math.min(1 - half + pb, c.y));
     c.x = ((c.x % 1) + 1) % 1;
   }
   // css px -> world
@@ -161,11 +169,15 @@ export class MapRenderer {
     c.x = wx - (px * this.dpr - this.vw / 2) / c.s; c.y = wy - (py * this.dpr - this.vh / 2) / c.s; this.clampCam(); this.dirty();
   }
   panBy(dxCss, dyCss) { const c = this.cam; c.x -= dxCss * this.dpr / c.s; c.y -= dyCss * this.dpr / c.s; this.clampCam(); this.dirty(); }
-  flyTo(lng, lat, zoomPx) { this.cam.x = mercX(lng); this.cam.y = mercY(lat); if (zoomPx) this.cam.s = zoomPx * this.dpr; this.clampCam(); this.dirty(); }
+  // pad: css px of the map hidden behind UI (left panel on tablets, bottom sheet on phones)
+  get visibleCenter() { const p = this.pad || { l: 0, b: 0 }; return [(this.vw / this.dpr + p.l) / 2, (this.vh / this.dpr - p.b) / 2]; }
+  _centerOn(x, y) { const [cx, cy] = this.visibleCenter; this.cam.x = x - (cx * this.dpr - this.vw / 2) / this.cam.s; this.cam.y = y - (cy * this.dpr - this.vh / 2) / this.cam.s; }
+  flyTo(lng, lat, zoomPx) { if (zoomPx) this.cam.s = zoomPx * this.dpr; this.clampCam(); this._centerOn(mercX(lng), mercY(lat)); this.clampCam(); this.dirty(); }
   fitBounds(w, s, e, n) {
     const x0 = mercX(w), x1 = mercX(e < w ? e + 360 : e), y0 = mercY(n), y1 = mercY(s);
-    this.cam.x = (x0 + x1) / 2; this.cam.y = (y0 + y1) / 2;
-    this.cam.s = Math.min(this.vw / Math.max(1e-6, x1 - x0), this.vh * 0.75 / Math.max(1e-6, y1 - y0)) * 0.9; this.clampCam(); this.dirty();
+    const p = this.pad || { l: 0, b: 0 }, ww = this.vw - p.l * this.dpr, hh = this.vh - p.b * this.dpr;
+    this.cam.s = Math.min(this.maxScale / 8, Math.min(ww / Math.max(1e-6, x1 - x0), hh / Math.max(1e-6, y1 - y0)) * 0.85); this.clampCam();
+    this._centerOn((x0 + x1) / 2, (y0 + y1) / 2); this.clampCam(); this.dirty();
   }
   get cssScale() { return this.cam.s / this.dpr; } // css px per world unit; 256 = zoom 0
 

@@ -64,6 +64,7 @@ export function createWorld(D, opts = {}) {
     setRel(W, a, b, clamp(r, -100, 100));
   }
   for (const n of W.nations) if (n) { n.hist = { m: [], pop: [], gdp: [], cells: [], stab: [] }; snapshot(W, n); n.lastElection = -Math.floor(rng() * 48); }
+  initTimeline(W);
   return W;
 }
 
@@ -151,4 +152,23 @@ export function atWarSet(W) { const s = new Set(); for (const w of W.wars) { s.a
 export function transferCells(W, cellsList, to) {
   let n = 0; for (const i of cellsList) if (W.owner[i] !== to && W.D.cells.country[i]) { W.owner[i] = to; n++; }
   return n;
+}
+
+// ---- border history: a keyframe plus yearly sparse deltas of cell ownership (over land cells) ----
+export function initTimeline(W) {
+  const key = new Uint16Array(W.land.length); for (let k = 0; k < W.land.length; k++) key[k] = W.owner[W.land[k]];
+  W.timeline = { start: W.month, key, deltas: [] }; W.tlLast = key.slice();
+}
+export function recordTimeline(W) {
+  if (!W.timeline) initTimeline(W);
+  const last = W.tlLast, idx = [], val = [];
+  for (let k = 0; k < W.land.length; k++) { const o = W.owner[W.land[k]]; if (o !== last[k]) { idx.push(k); val.push(o); last[k] = o; } }
+  W.timeline.deltas.push({ m: W.month, idx: Int32Array.from(idx), val: Uint16Array.from(val) });
+}
+// full-grid owner array as it was at month m (nearest recorded year at or before m)
+export function ownerAt(W, m) {
+  const T = W.timeline, cur = T.key.slice();
+  for (const d of T.deltas) { if (d.m > m) break; for (let k = 0; k < d.idx.length; k++) cur[d.idx[k]] = d.val[k]; }
+  const out = new Uint16Array(W.N); for (let k = 0; k < W.land.length; k++) out[W.land[k]] = cur[k];
+  return out;
 }
