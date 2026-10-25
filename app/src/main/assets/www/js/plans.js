@@ -161,6 +161,20 @@ export function districtVotes(W, p, nation) {
 
 // Paint helpers. Each returns list of [unit, oldValue] for undo.
 // noOverwrite: leave units that already belong to another district alone (Districtr's "forbid paint-over")
+// Communities of interest: one optional community per unit, stored on the plan.
+export const COI_COLORS = [[255, 206, 84], [94, 234, 212], [244, 114, 182], [167, 139, 250], [134, 239, 172], [251, 146, 60], [125, 211, 252], [253, 164, 175]];
+export function ensureCoi(p) { if (!p.coiAssign || p.coiAssign.length !== p.assign.length) p.coiAssign = new Int16Array(p.assign.length).fill(-1); if (!p.cois) p.cois = []; return p; }
+export function paintCoi(W, p, list, c, changes) {
+  ensureCoi(p); const A = p.coiAssign;
+  for (const u of list) { if (u < 0 || u >= A.length || !eligible(W, p, u) || A[u] === c) continue; if (changes && !changes.has(u)) changes.set(u, A[u]); A[u] = c; }
+}
+// For each community: population, and how it is shared between districts.
+export function coiReport(W, p) {
+  ensureCoi(p); const pops = unitPops(W, p), out = p.cois.map((c, k) => ({ k, name: c.name, pop: 0, units: 0, by: new Map() }));
+  for (let u = 0; u < p.coiAssign.length; u++) { const c = p.coiAssign[u]; if (c < 0 || !out[c]) continue; const R = out[c]; R.pop += pops[u]; R.units++; const d = p.assign[u]; R.by.set(d, (R.by.get(d) || 0) + pops[u]); }
+  for (const R of out) { R.parts = [...R.by.entries()].filter(([d]) => d >= 0).sort((a, b) => b[1] - a[1]); R.whole = R.parts.length <= 1 && !R.by.has(-1); }
+  return out;
+}
 export function paintUnits(W, p, list, d, changes, noOverwrite = false) {
   for (const u of list) {
     if (u < 0 || u >= p.assign.length || !eligible(W, p, u)) continue;
@@ -382,4 +396,34 @@ export function recomInput(W, p) {
   else if (p.unit === 'counties') { const m = new Map(); parent = Int32Array.from(elig, (u) => { const s = W.D.units.counties[u].s; if (!m.has(s)) m.set(s, m.size); return m.get(s); }); }
   else if (p.unit === 'cells') parent = Int32Array.from(elig, (u) => W.D.cells.admin1[u]);
   return { elig, n, off, nb: Int32Array.from(nbs), pop, dem, rep, parent };
+}
+
+// ---- shareable plan codes: "AF1:" + base64url(gzip(JSON header + Int16 assignments)) ----
+const b64 = (u8) => { let s2 = ''; for (let i = 0; i < u8.length; i += 0x8000) s2 += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s2).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+const unb64 = (t) => { const s2 = atob(t.replace(/-/g, '+').replace(/_/g, '/')); const u = new Uint8Array(s2.length); for (let i = 0; i < s2.length; i++) u[i] = s2.charCodeAt(i); return u; };
+async function gz(u8, mode) { const st = new Blob([u8]).stream().pipeThrough(mode ? new CompressionStream('gzip') : new DecompressionStream('gzip')); return new Uint8Array(await new Response(st).arrayBuffer()); }
+export async function encodePlan(W, p) {
+  // cells plans store only land cells in the plan's area to stay short
+  const idx = []; for (let u = 0; u < p.assign.length; u++) if (p.unit !== 'cells' || (W.D.cells.country[u] && eligible(W, p, u))) idx.push(u);
+  const A = Int16Array.from(idx, (u) => p.assign[u]), C = p.coiAssign ? Int16Array.from(idx, (u) => p.coiAssign[u]) : null;
+  const head = JSON.stringify({ v: 1, name: p.name, unit: p.unit, scope: p.scope, pack: p.pack || null, n: p.n, len: idx.length, total: p.assign.length, election: p.election || 0, cois: p.cois || [], hasCoi: !!C, notes: p.notes || '' });
+  const hb = new TextEncoder().encode(head), body = new Uint8Array(4 + hb.length + A.byteLength + (C ? C.byteLength : 0));
+  new DataView(body.buffer).setUint32(0, hb.length, true); body.set(hb, 4); body.set(new Uint8Array(A.buffer), 4 + hb.length); if (C) body.set(new Uint8Array(C.buffer), 4 + hb.length + A.byteLength);
+  return 'AF1:' + b64(await gz(body, true));
+}
+export async function decodePlan(text) {
+  const m = String(text).match(/AF1:([A-Za-z0-9_-]+)/); if (!m) throw new Error('No Atlas Forge plan code found');
+  const body = await gz(unb64(m[1]), false), hl = new DataView(body.buffer).getUint32(0, true);
+  const H = JSON.parse(new TextDecoder().decode(body.slice(4, 4 + hl)));
+  const A = new Int16Array(body.slice(4 + hl, 4 + hl + H.len * 2).buffer), C = H.hasCoi ? new Int16Array(body.slice(4 + hl + H.len * 2, 4 + hl + H.len * 4).buffer) : null;
+  return { H, A, C };
+}
+export function applyDecoded(W, { H, A, C }) {
+  const p = newPlan(W, { name: H.name + ' (shared)', unit: H.unit, scope: H.scope, n: H.n, pack: H.pack });
+  const idx = []; for (let u = 0; u < p.assign.length; u++) if (p.unit !== 'cells' || (W.D.cells.country[u] && eligible(W, p, u))) idx.push(u);
+  if (idx.length !== H.len) throw new Error('This code was made for a different map version');
+  idx.forEach((u, k) => { p.assign[u] = A[k]; });
+  if (C) { ensureCoi(p); idx.forEach((u, k) => { p.coiAssign[u] = C[k]; }); p.cois = H.cois; }
+  p.election = H.election || 0; p.notes = H.notes || '';
+  return p;
 }

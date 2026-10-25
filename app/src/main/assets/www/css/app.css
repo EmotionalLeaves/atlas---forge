@@ -273,3 +273,8 @@ td.maj { color: var(--accent2); font-weight: 700; }
 .game .event small { color: var(--muted); font-size: 11px; }
 .game.won { border-color: var(--good); } .game.lost { border-color: var(--danger); }
 .budget .slider { margin: 4px 0; }
+.coi { cursor: pointer; }
+.coi.on { border-color: var(--accent); }
+.coih { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.coih input { flex: 1; padding: 6px 8px; }
+.coi textarea { font-size: 13px; padding: 6px 8px; margin-bottom: 6px; }

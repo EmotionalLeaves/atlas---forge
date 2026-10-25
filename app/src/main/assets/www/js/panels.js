@@ -7,7 +7,7 @@ import { packList } from './precincts.js';
 import { startGame, resolveEvent, endGame, POLICIES, rankOf } from './game.js';
 import { rel, setRel, computeAggregates, computeAdjacency, newNation, cellLngLat, addNews, GOVS, prodOf, MAXN, warBetween } from './world.js';
 import { declareWar, endWar, annex, DISASTERS } from './sim.js';
-import { recomInput, newPlan, setDistrictCount, autoFill, randomPlan, UNIT_TYPES, planStats, unitCenter, PARENT_NAME, PARENT_PLURAL, planSplits, importCSV, applyRealPlan, planLayer, PRECINCT_COLORS, defaultElection } from './plans.js';
+import { encodePlan, decodePlan, applyDecoded, coiReport, ensureCoi, COI_COLORS, recomInput, newPlan, setDistrictCount, autoFill, randomPlan, UNIT_TYPES, planStats, unitCenter, PARENT_NAME, PARENT_PLURAL, planSplits, importCSV, applyRealPlan, planLayer, PRECINCT_COLORS, defaultElection } from './plans.js';
 import { FORMULA_VARS, compileFormula, unitAgg } from './themes.js';
 import { listSlots, getSlot, putSlot, delSlot, serialize, deserialize, exportBlob, importBlob } from './store.js';
 import { createWorld } from './world.js';
@@ -476,10 +476,11 @@ function renderDraw(b) {
     h('select', { onchange: async (e) => { app.activePlan = +e.target.value; app.district = 0; await ensurePlanPack(); computePlanStats(); refresh(); refreshPanels(); } }, W.plans.map((x) => h('option', { value: x.id, selected: x.id === p.id }, x.name + (x.status && x.status !== 'Scratch work' ? ` · ${x.status}` : '')))),
     btn('＋', () => openModal('New district plan', newPlanForm(true)), 'sq'),
     btn('⋯', () => openPlanMenu(p), 'sq')));
-  b.append(seg([['paint', 'Paint'], ['pop', 'Population'], ['layers', 'Layers'], ['eval', 'Evaluate']], app.drawTab, (v) => { app.drawTab = v; refreshPanels(); }));
+  b.append(seg([['paint', 'Paint'], ['pop', 'People'], ['coi', 'Places'], ['layers', 'Layers'], ['eval', 'Evaluate']], app.drawTab, (v) => { const was = app.drawTab; app.drawTab = v; if (was === 'coi' || v === 'coi') refresh(); refreshPanels(); }));
   const st = app.stats;
   if (app.drawTab === 'pop') return renderPopTab(b, p, st);
   if (app.drawTab === 'layers') return renderLayersTab(b, p);
+  if (app.drawTab === 'coi') return renderCoiTab(b, p);
   if (app.drawTab === 'eval') return renderEvalTab(b, p, st);
   const tools = [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['erase', 'eraser', 'Erase'], ['fill', 'bucket', 'Fill'], ['pick', 'dropper', 'Pick']];
   b.append(h('div', { class: 'tools' }, tools.map(([t, ic, l]) => h('button', { class: app.tool === t ? 'on' : '', onclick: () => { app.tool = t; refreshPanels(); } }, h('span', { class: 'ti', html: ICON[ic] || ic }), h('small', null, l))),
@@ -522,6 +523,29 @@ function districtChips(p, st) {
   return chips;
 }
 // Districtr's population tab: one balance bar per district against the ideal size.
+// Districtr-style communities of interest: name a place that should stay together and paint it.
+function renderCoiTab(b, p) {
+  ensureCoi(p); const W = app.W; if (app.coi == null || app.coi >= p.cois.length) app.coi = 0;
+  b.append(h('p', { class: 'muted small' }, 'Mark places that belong together — a neighbourhood, a school area, a farming region — then check whether your districts split them.'));
+  if (p.cois.length) {
+    const tools = [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['erase', 'eraser', 'Erase']];
+    b.append(h('div', { class: 'tools' }, tools.map(([t, ic, l]) => h('button', { class: app.tool === t ? 'on' : '', onclick: () => { app.tool = t; refreshPanels(); } }, h('span', { class: 'ti', html: ICON[ic] }), h('small', null, l))),
+      h('button', { onclick: () => undoRedo(false), disabled: !app.undo.length }, h('span', { class: 'ti', html: ICON.undo }), h('small', null, 'Undo'))));
+    if (['brush', 'erase'].includes(app.tool)) b.append(brushSlider());
+  }
+  const rep = coiReport(W, p);
+  for (const R of rep) {
+    const c = p.cois[R.k], col = COI_COLORS[R.k % COI_COLORS.length];
+    b.append(h('div', { class: 'card slim coi' + (app.coi === R.k ? ' on' : ''), onclick: (e) => { if (e.target.closest('button,input,textarea')) return; app.coi = R.k; if (app.tool === 'pan') app.tool = 'brush'; refreshPanels(); } },
+      h('div', { class: 'coih' }, h('span', { class: 'dot', style: { background: hex(col), width: '14px', height: '14px' } }), h('input', { value: c.name, onchange: (e) => { c.name = e.target.value || c.name; } }),
+        h('button', { class: 'x', style: { position: 'static' }, onclick: () => { if (!confirm(`Delete “${c.name}”?`)) return; for (let u = 0; u < p.coiAssign.length; u++) { if (p.coiAssign[u] === R.k) p.coiAssign[u] = -1; else if (p.coiAssign[u] > R.k) p.coiAssign[u]--; } p.cois.splice(R.k, 1); app.coi = 0; refresh(); refreshPanels(); } }, '×')),
+      h('textarea', { rows: 2, placeholder: 'Why does this place belong together?', oninput: (e) => { c.note = e.target.value; } }, c.note || ''),
+      R.units ? h('div', { class: 'small' }, R.whole ? h('b', { style: { color: 'var(--good)' } }, `✓ Kept whole in district ${R.parts[0] ? R.parts[0][0] + 1 : '—'}`) : h('b', { style: { color: '#ff9b85' } }, `Split between ${R.parts.length} districts${R.by.has(-1) ? ' (+ unassigned)' : ''}`), ` · ${fmt(R.pop)} people`,
+        !R.whole ? h('div', { class: 'chips' }, R.parts.map(([d, v]) => h('span', { class: 'chip-s' }, h('span', { class: 'dot', style: { background: hex(p.colors[d]) } }), `${d + 1}: ${pct(v / (R.pop || 1))}`))) : null)
+        : h('div', { class: 'muted small' }, app.coi === R.k ? 'Paint it on the map.' : 'Tap to select, then paint it on the map.')));
+  }
+  b.append(btn('＋ New place', () => { const k = p.cois.length; p.cois.push({ name: `Place ${k + 1}`, note: '' }); app.coi = k; app.tool = 'brush'; refreshPanels(); }, 'wide' + (p.cois.length ? '' : ' primary')));
+}
 function renderPopTab(b, p, st) {
   if (!st) return;
   const maxPop = Math.max(st.ideal * 1.25, ...st.districts.map((d) => d.pop)) || 1;
@@ -610,6 +634,7 @@ function renderEvalTab(b, p, st) {
     check(balanced, 'Population balance', `largest deviation ${pct(st.maxDev, 1)} (aim for ≤5%)`),
     check(sp.split <= p.n, `${PARENT_NAME[p.unit][0].toUpperCase() + PARENT_NAME[p.unit].slice(1)} splits`, `${sp.split} of ${sp.parents} split`),
     row('Compactness (Polsby-Popper)', pps.length ? `avg ${(pps.reduce((a, c) => a + c, 0) / pps.length).toFixed(2)} · min ${Math.min(...pps).toFixed(2)}` : '—')));
+  if (p.cois && p.cois.length) { const R = coiReport(app.W, p).filter((x) => x.units); if (R.length) b.append(h('div', { class: 'card slim' }, check(R.every((x) => x.whole), 'Places kept whole', `${R.filter((x) => x.whole).length} of ${R.length}`))); }
   if (p.unit === 'precincts') b.append(electionPicker(p));
   if (st.raceLabels) {
     const tot = st.districts.reduce((a, d) => a + d.pop, 0) || 1;
@@ -698,6 +723,19 @@ function newPlanForm(inModal) {
     h('label', null, 'Name', nameIn),
     h('label', null, 'Number of districts', nInput),
     randRow, status,
+    h('details', { class: 'sec' }, h('summary', null, 'Have a plan code?'), (() => {
+      const ta = h('textarea', { rows: 3, placeholder: 'Paste a code that starts with AF1:' });
+      return h('div', null, ta, h('div', { class: 'btns' },
+        window.AndroidBridge && AndroidBridge.clipboardText ? btn('Paste', () => { ta.value = AndroidBridge.clipboardText(); }) : null,
+        btn('Open plan', async () => {
+          try {
+            const D2 = await decodePlan(ta.value); if (D2.H.unit === 'precincts') await usePack(D2.H.pack, (fr, t2) => { status.textContent = t2; });
+            const p = applyDecoded(W, D2); app.activePlan = p.id; app.district = 0; rebuildCatalog(); closeModal(); computePlanStats(); refresh(); refreshPanels();
+            if (p.unit === 'precincts') { const bb = W.D.packs[p.pack].bbox; app.R.fitBounds(bb[0], bb[3], bb[2], bb[1]); }
+            toast(`Opened “${p.name}”`);
+          } catch (err) { toast(err.message, 5000); }
+        }, 'primary')));
+    })()),
     btn('Create plan', async (e) => {
       const button = e.currentTarget; button.disabled = true;
       try {
@@ -742,6 +780,7 @@ function openPlanMenu(p) {
       btn('Clear all', () => { if (confirm('Clear every district in this plan?')) { p.assign.fill(-1); app.undo = []; app.redo = []; closeModal(); computePlanStats(); refresh(); refreshPanels(); } }),
       btn('Export CSV', () => exportPlanCSV(p)),
       btn('Import CSV', () => { closeModal(); importPlanCSV(p); }),
+      btn('Share as code', async () => { try { const code = await encodePlan(W, p); shareText(`Atlas Forge plan: ${p.name}`, `${p.name} — open Atlas Forge → Draw → ＋ → Paste a plan code\n\n${code}`); } catch (e) { toast('Could not share: ' + e.message, 4000); } }),
       btn('Show as map', () => { closeModal(); setTheme('plan_' + p.id); }),
       btn('Delete plan', () => { if (confirm('Delete this plan?')) { W.plans = W.plans.filter((x) => x !== p); app.activePlan = W.plans.length ? W.plans[0].id : null; rebuildCatalog(); closeModal(); computePlanStats(); refresh(); refreshPanels(); } }, 'danger')));
   openModal('Plan options', body);
@@ -963,6 +1002,11 @@ function openNewWorld() {
     h('label', null, 'Name', h('input', { value: st.name, oninput: (e) => { st.name = e.target.value; } })),
     h('label', null, 'Starting governments', h('select', { onchange: (e) => { st.govs = e.target.value; } }, h('option', { value: 'republics' }, 'Every nation a republic'), h('option', { value: 'random' }, 'Random mix'))),
     btn('Create world', () => { app.running = false; const w = createWorld(app.D, { govs: st.govs, name: st.name }); setWorld(w); closeModal(); refreshPanels(); autosave(); toast('A new world begins'); }, 'primary wide')));
+}
+export function shareText(subject, text) {
+  if (window.AndroidBridge && AndroidBridge.shareText) { AndroidBridge.shareText(subject, text); return; }
+  if (navigator.share) { navigator.share({ title: subject, text }).catch(() => {}); return; }
+  (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => toast('Plan code copied'), () => openModal('Plan code', h('textarea', { rows: 8, readonly: true }, text)));
 }
 export async function saveFile(name, blob) {
   if (window.AndroidBridge && AndroidBridge.saveFile) {

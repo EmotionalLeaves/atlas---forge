@@ -4,7 +4,7 @@ import { loadData } from './data.js';
 import { createWorld, computeAggregates, computeAdjacency, cellAt, cellLngLat, addNews, newNation, ownerAt, rel, setRel } from './world.js';
 import { tick, applyDisaster } from './sim.js';
 import { buildCatalog, colorize, unitAgg } from './themes.js';
-import { planStats, paintUnits, brushCells, floodUnits, eligible, districtVotes, parentUnits, unitLayer, planLayer } from './plans.js';
+import { planStats, paintUnits, brushCells, floodUnits, eligible, districtVotes, parentUnits, unitLayer, planLayer, paintCoi, ensureCoi, COI_COLORS } from './plans.js';
 import { loadPack, getLoaded } from './precincts.js';
 import { getSlot, putSlot, serialize, deserialize } from './store.js';
 import { TERRAIN_COLORS, clamp, h, hsl } from './util.js';
@@ -207,7 +207,13 @@ function composeCells(list) {
   for (let k = 0; k < list.length; k++) {
     const i = list[k], o = i * 4;
     let r = base[o], g = base[o + 1], b = base[o + 2];
-    if (cellPlan) {
+    if (cellPlan && app.drawTab === 'coi') {
+      const c = cellPlan.coiAssign ? cellPlan.coiAssign[i] : -1, d = cellPlan.assign[i];
+      if (c >= 0 && cellPlan.cois[c]) { const col = COI_COLORS[c % COI_COLORS.length]; r = col[0]; g = col[1]; b = col[2]; }
+      else if (eligible(W, cellPlan, i)) { const dc = d >= 0 ? cellPlan.colors[d] : [120, 124, 132]; r = dc[0] * 0.3 + 40; g = dc[1] * 0.3 + 42; b = dc[2] * 0.3 + 48; }
+      else { r *= 0.45; g *= 0.45; b *= 0.5; }
+      grp[o + 2] = (c + 1) & 255; grp[o + 3] = (c + 1) >> 8;
+    } else if (cellPlan) {
       const d = cellPlan.assign[i], O = app.drawOpts;
       if (d >= 0 && !O.hideDistricts) { const c = districtCol(cellPlan, d); if (O.showData) { r = r * 0.45 + c[0] * 0.55; g = g * 0.45 + c[1] * 0.55; b = b * 0.45 + c[2] * 0.55; } else { r = c[0]; g = c[1]; b = c[2]; } }
       else if (eligible(W, cellPlan, i)) { if (d < 0 && O.highlightUnassigned && !O.showData) { r = r * 0.3 + 175; g = g * 0.3 + 160; b = b * 0.3 + 95; } else if (!O.showData) { r = r * 0.35 + 150; g = g * 0.35 + 152; b = b * 0.35 + 158; } }
@@ -350,7 +356,7 @@ function unsmoothFor(list) {
 function districtOutlines(p) {
   if (!p || app.drawOpts.hideDistricts) { app.R.setOverlayLines('districts', null); return; }
   const LY = planLayer(app.W, p); if (!LY) return; const g = LY.geom; if (!g.lnb) return;
-  const A = p.assign, out = [];
+  const A = app.drawTab === 'coi' && p.coiAssign ? p.coiAssign : p.assign, out = [];
   for (let k = 0; k < g.luid.length; k += 2) {
     const d = A[g.luid[k]]; if (d < 0) continue;
     const nb = g.lnb[k], e = nb === 65535 ? -2 : A[nb];
@@ -369,10 +375,11 @@ export function districtCol(p, d) {
   return PARTISAN[k].map((c, j) => Math.round(c + (PARTISAN[k + 1][j] - c) * f));
 }
 function overlayPlanUnits(p, arr, list) {
-  const W = app.W, O = app.drawOpts, base = app._unitBase && app._unitBase.length === arr.length ? app._unitBase : null;
+  const W = app.W, O = app.drawOpts, base = app._unitBase && app._unitBase.length === arr.length ? app._unitBase : null, coiView = app.drawTab === 'coi';
   const one = (u) => {
     const o = u * 4, d = p.assign[u];
     const br = base ? base[o] : arr[o], bg = base ? base[o + 1] : arr[o + 1], bb = base ? base[o + 2] : arr[o + 2];
+    if (coiView) { const c = p.coiAssign ? p.coiAssign[u] : -1; if (c >= 0 && p.cois[c]) { const col = COI_COLORS[c % COI_COLORS.length]; arr[o] = col[0]; arr[o + 1] = col[1]; arr[o + 2] = col[2]; arr[o + 3] = 255; } else if (eligible(W, p, u)) { const dc = d >= 0 ? p.colors[d] : [120, 124, 132]; arr[o] = dc[0] * 0.3 + 40; arr[o + 1] = dc[1] * 0.3 + 42; arr[o + 2] = dc[2] * 0.3 + 48; arr[o + 3] = 235; } else { arr[o] = br * 0.4; arr[o + 1] = bg * 0.4; arr[o + 2] = bb * 0.45; arr[o + 3] = 150; } return; }
     if (d >= 0 && !O.hideDistricts) { const c = districtCol(p, d); if (O.showData) { arr[o] = br * 0.45 + c[0] * 0.55; arr[o + 1] = bg * 0.45 + c[1] * 0.55; arr[o + 2] = bb * 0.45 + c[2] * 0.55; } else { arr[o] = c[0]; arr[o + 1] = c[1]; arr[o + 2] = c[2]; } arr[o + 3] = 255; }
     else if (eligible(W, p, u)) {
       if (O.showData || (d >= 0 && O.hideDistricts)) { arr[o] = br; arr[o + 1] = bg; arr[o + 2] = bb; arr[o + 3] = 235; }
@@ -545,7 +552,7 @@ export function cellAtScreen(px, py) { const [lng, lat] = app.R.screenToLngLat(p
 
 // ---------------------------------------------------------------- tools & painting
 export function paintTarget() {
-  if (app.mode === 'draw' && plan() && ['brush', 'erase'].includes(app.tool)) return 'plan';
+  if (app.mode === 'draw' && plan() && ['brush', 'erase'].includes(app.tool)) return app.drawTab === 'coi' ? (plan().cois && plan().cois[app.coi] || app.tool === 'erase' ? 'coi' : null) : 'plan';
   if (app.mode === 'edit' && app.tool === 'brush' && ['borders', 'data'].includes(app.editTool)) return app.editTool;
   return null;
 }
@@ -562,15 +569,16 @@ function strokeMove(px, py) {
   if (stroke.last) { const d = Math.hypot(px - stroke.last[0], py - stroke.last[1]); const n = Math.max(1, Math.ceil(d / 6)); for (let k = 1; k <= n; k++) pts.push([stroke.last[0] + (px - stroke.last[0]) * k / n, stroke.last[1] + (py - stroke.last[1]) * k / n]); }
   else pts.push(cur);
   stroke.last = cur;
-  const unitMode = stroke.tgt === 'plan' && p.unit !== 'cells';
+  const unitMode = (stroke.tgt === 'plan' || stroke.tgt === 'coi') && p.unit !== 'cells';
   if (unitMode) {
     const list = [];
     const rad = (app.brush - 1) * 9, offs = [[0, 0]];
     if (rad > 0) for (let r = rad / 2; r <= rad; r += rad / 2) for (let a = 0; a < 12; a++) offs.push([Math.cos(a * Math.PI / 6) * r, Math.sin(a * Math.PI / 6) * r]);
     for (const [x, y] of pts) for (const [ox, oy] of offs) { const [wx, wy] = app.R.screenToWorld(x + ox, y + oy); const u = pickUnit(p.unit, wx, wy); if (u >= 0) list.push(u); }
     if (!list.length) return;
-    const all = app.drawOpts.parent && app.tool !== 'erase' ? [...new Set(list.flatMap((u) => parentUnits(W, p, u)))] : list;
-    paintUnits(W, p, all, app.tool === 'erase' ? -1 : app.district, stroke.changes, app.drawOpts.noOverwrite);
+    const all = app.drawOpts.parent && app.tool !== 'erase' && stroke.tgt === 'plan' ? [...new Set(list.flatMap((u) => parentUnits(W, p, u)))] : list;
+    if (stroke.tgt === 'coi') paintCoi(W, p, all, app.tool === 'erase' ? -1 : app.coi, stroke.changes);
+    else paintUnits(W, p, all, app.tool === 'erase' ? -1 : app.district, stroke.changes, app.drawOpts.noOverwrite);
     const arr = app.unitRGBA[p.unit]; overlayPlanUnits(p, arr, all); app.R.setPolyColors(p.unit, arr); scheduleOutlines(p); scheduleStats();
     return;
   }
@@ -578,7 +586,8 @@ function strokeMove(px, py) {
   for (const [x, y] of pts) { const i = cellAtScreen(x, y); if (i < 0) continue; for (const c of brushCells(W, i % W.Wd, (i / W.Wd) | 0, app.brush - 1)) cells.add(c); }
   let list = [...cells].filter((i) => W.D.cells.country[i]);
   if (!list.length) return;
-  if (stroke.tgt === 'plan') {
+  if (stroke.tgt === 'coi') paintCoi(W, p, list, app.tool === 'erase' ? -1 : app.coi, stroke.changes);
+  else if (stroke.tgt === 'plan') {
     if (app.drawOpts.parent && app.tool !== 'erase') { const done = stroke.parents || (stroke.parents = new Set()); const more = []; for (const i of list) { const pr = W.D.cells.admin1[i]; if (pr && !done.has(pr)) { done.add(pr); more.push(...parentUnits(W, p, i, app.provCells)); } } list = list.concat(more); }
     paintUnits(W, p, list, app.tool === 'erase' ? -1 : app.district, stroke.changes, app.drawOpts.noOverwrite); scheduleStats();
   }
@@ -624,6 +633,7 @@ function strokeEnd() {
 function undoArray(entry) {
   const W = app.W;
   if (entry.tgt === 'plan') { const p = W.plans.find((x) => x.id === entry.plan); return p && p.assign; }
+  if (entry.tgt === 'coi') { const p = W.plans.find((x) => x.id === entry.plan); return p && ensureCoi(p).coiAssign; }
   if (entry.tgt === 'borders') return W.owner;
   return entry.arr;
 }

@@ -151,8 +151,27 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
 
-    /** Lets the web app save files (world exports, CSVs) into Downloads/AtlasForge. */
+    /** Lets the web app save files (world exports, CSVs) into Downloads/AtlasForge, and share text. */
     private class Bridge {
+        @JavascriptInterface
+        public void shareText(String subject, String text) {
+            runOnUiThread(() -> {
+                Intent i = new Intent(Intent.ACTION_SEND);
+                i.setType("text/plain");
+                i.putExtra(Intent.EXTRA_SUBJECT, subject);
+                i.putExtra(Intent.EXTRA_TEXT, text);
+                try { startActivity(Intent.createChooser(i, "Share plan")); } catch (ActivityNotFoundException ignored) { }
+            });
+        }
+
+        @JavascriptInterface
+        public String clipboardText() {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cm == null || !cm.hasPrimaryClip() || cm.getPrimaryClip().getItemCount() == 0) return "";
+            CharSequence t = cm.getPrimaryClip().getItemAt(0).coerceToText(MainActivity.this);
+            return t == null ? "" : t.toString();
+        }
+
         @JavascriptInterface
         public String saveFile(String name, String base64, String mime) {
             try {

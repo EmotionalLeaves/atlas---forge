@@ -44,7 +44,7 @@ export function serialize(W) {
     formulas: W.formulas, mood: W.mood.slice(0, nn), nn, rel,
     owner: onLand(W, W.owner, Uint16Array), pop: onLand(W, W.pop, Float32Array), pop0: onLand(W, W.pop0, Float32Array), dev: onLand(W, W.dev, Float32Array),
     lean: onLand(W, W.lean, Float32Array), lean0: onLand(W, W.lean0, Float32Array), terrain: onLand(W, W.terrain, Uint8Array), custom,
-    plans: W.plans.map((p) => ({ ...p, assign: p.unit === 'cells' ? onLand(W, p.assign, Int16Array) : p.assign.slice() })),
+    plans: W.plans.map((p) => ({ ...p, assign: p.unit === 'cells' ? onLand(W, p.assign, Int16Array) : p.assign.slice(), coiAssign: p.coiAssign ? (p.unit === 'cells' ? onLand(W, p.coiAssign, Int16Array) : p.coiAssign.slice()) : null })),
     aliveCount: W.nations.filter((n) => n && n.alive).length,
     game: W.game || null,
     timeline: W.timeline ? { start: W.timeline.start, key: W.timeline.key, deltas: W.timeline.deltas } : null,
@@ -62,7 +62,8 @@ export function deserialize(D, S) {
   W.rel.fill(0); const nn = S.nn; for (let a = 0; a < nn; a++) for (let b = 0; b < nn; b++) W.rel[a * MAXN + b] = S.rel[a * nn + b];
   W.owner.fill(0); fromLand(W, S.owner, W.owner); fromLand(W, S.pop, W.pop); fromLand(W, S.pop0, W.pop0); fromLand(W, S.dev, W.dev); fromLand(W, S.lean, W.lean); if (S.lean0) fromLand(W, S.lean0, W.lean0); else W.lean0.set(W.lean); fromLand(W, S.terrain, W.terrain);
   W.custom = {}; for (const [k, v] of Object.entries(S.custom || {})) { const a = new Float32Array(W.N); fromLand(W, v, a); W.custom[k] = a; }
-  W.plans = (S.plans || []).map((p) => { let assign; if (p.unit === 'cells') { assign = new Int16Array(W.N).fill(-1); fromLand(W, p.assign, assign); } else assign = Int16Array.from(p.assign); return { ...p, assign }; });
+  const unland = (p, a) => { if (!a) return null; if (p.unit === 'cells') { const x = new Int16Array(W.N).fill(-1); fromLand(W, a, x); return x; } return Int16Array.from(a); };
+  W.plans = (S.plans || []).map((p) => ({ ...p, assign: unland(p, p.assign), coiAssign: unland(p, p.coiAssign) }));
   if (S.timeline && S.timeline.key && S.timeline.key.length === W.land.length) {
     W.timeline = { start: S.timeline.start, key: Uint16Array.from(S.timeline.key), deltas: S.timeline.deltas.map((d) => ({ m: d.m, idx: Int32Array.from(d.idx), val: Uint16Array.from(d.val) })) };
     W.tlLast = W.timeline.key.slice(); for (const d of W.timeline.deltas) for (let k = 0; k < d.idx.length; k++) W.tlLast[d.idx[k]] = d.val[k];
