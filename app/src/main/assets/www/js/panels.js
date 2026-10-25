@@ -591,6 +591,7 @@ function renderDraw(b) {
     h('select', { onchange: async (e) => { app.activePlan = +e.target.value; app.district = 0; await ensurePlanPack(); computePlanStats(); refresh(); refreshPanels(); } }, W.plans.map((x) => h('option', { value: x.id, selected: x.id === p.id }, x.name + (x.status && x.status !== 'Scratch work' ? ` · ${x.status}` : '')))),
     btn('＋', () => openModal('New district plan', newPlanForm(true)), 'sq'),
     btn('⋯', () => openPlanMenu(p), 'sq')));
+  if (app.stats) b.append(districtStrip(p, app.stats));
   b.append(seg([['paint', 'Paint'], ['pop', 'People'], ['coi', 'Places'], ['layers', 'Layers'], ['eval', 'Evaluate']], app.drawTab, (v) => { const was = app.drawTab; app.drawTab = v; if (was === 'coi' || v === 'coi') refresh(); refreshPanels(); }));
   const st = app.stats;
   if (app.drawTab === 'pop') return renderPopTab(b, p, st);
@@ -613,6 +614,16 @@ function renderDraw(b) {
       h('div', { class: 'btns' }, btn(p.locked[app.district] ? '🔓 Unlock' : '🔒 Lock', () => { p.locked[app.district] = !p.locked[app.district]; refreshPanels(); }), btn('Zoom to', () => zoomToDistrict(p, app.district)))));
     b.append(h('div', { class: 'muted small' }, `${fmt(st.unassignedPop)} people unassigned · largest deviation ${pct(st.maxDev, 1)} · ${scopeLabel(p)}`));
   }
+}
+// Districtr-style balance strip: one bar per district, the line is the ideal population.
+function districtStrip(p, st) {
+  const el = h('div', { class: 'dstrip', role: 'group', 'aria-label': 'District populations' });
+  for (const d of st.districts) {
+    const f = st.ideal ? d.pop / st.ideal : 0, bad = d.units && Math.abs(d.dev) > 0.05;
+    el.append(h('button', { class: 'db' + (d.k === app.district ? ' on' : '') + (bad ? ' bad' : ''), style: { '--c': hex(p.colors[d.k]) }, title: `District ${d.k + 1}: ${fmt(d.pop)} (${(d.dev * 100).toFixed(1)}%)`,
+      onclick: () => { app.district = d.k; if (app.tool === 'pan' || app.tool === 'pick') app.tool = 'brush'; refreshPanels(); } }, h('i', { style: { height: Math.min(100, f / 1.25 * 100) + '%' } })));
+  }
+  return h('div', { class: 'dstripw' }, el, h('small', { class: 'muted' }, `${fmt(st.unassignedPop)} people unassigned · largest deviation ${pct(st.maxDev, 1)}`));
 }
 function electionPicker(p) {
   const P = planLayer(app.W, p).pack;

@@ -338,3 +338,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .undo2 button { width: 36px; height: 25px; border-radius: var(--r-s); background: var(--panel2); display: grid; place-items: center; color: var(--text); }
 .undo2 button:disabled { opacity: .3; }
 .undo2 svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.dstripw { margin: 8px 0 4px; }
+.dstrip { display: flex; gap: 2px; height: 34px; align-items: stretch; position: relative; }
+.dstrip::after { content: ''; position: absolute; left: 0; right: 0; bottom: 80%; height: 1.5px; background: var(--text); opacity: .75; pointer-events: none; }
+.dstrip .db { flex: 1; min-width: 3px; display: flex; align-items: flex-end; border-radius: 3px 3px 0 0; background: rgba(236,231,218,.05); padding: 0; }
+.dstrip .db i { display: block; width: 100%; background: var(--c); border-radius: 3px 3px 0 0; opacity: .85; }
+.dstrip .db.on { background: rgba(236,231,218,.14); }
+.dstrip .db.on i { opacity: 1; box-shadow: 0 0 0 1.5px var(--text); }
+.dstrip .db.bad i { background: repeating-linear-gradient(45deg, var(--c) 0 4px, color-mix(in srgb, var(--c) 55%, #000) 4px 7px); }
+.dstripw small { font-size: 12px; display: block; margin-top: 4px; }
