@@ -1,18 +1,23 @@
 // Saving worlds: IndexedDB slots + portable export files (.atlas, gzip).
 import { createWorld, computeAggregates, computeAdjacency, initTimeline, MAXN } from './world.js';
 
-const DB = 'atlasforge', STORE = 'worlds';
+const DB = 'atlasforge', STORE = 'worlds', PACKS = 'packs';
+let dbp = null;
 function db() {
-  return new Promise((res, rej) => {
-    const r = indexedDB.open(DB, 1);
-    r.onupgradeneeded = () => r.result.createObjectStore(STORE);
-    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
-  });
+  return dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open(DB, 2);
+    r.onupgradeneeded = () => { const d = r.result; if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE); if (!d.objectStoreNames.contains(PACKS)) d.createObjectStore(PACKS); };
+    r.onsuccess = () => res(r.result); r.onerror = () => { dbp = null; rej(r.error); };
+  }));
 }
-async function tx(mode, fn) {
+async function tx(mode, fn, store = STORE) {
   const d = await db();
-  return new Promise((res, rej) => { const t = d.transaction(STORE, mode); const s = t.objectStore(STORE); const out = fn(s); t.oncomplete = () => res(out instanceof IDBRequest ? out.result : out); t.onerror = () => rej(t.error); });
+  return new Promise((res, rej) => { const t = d.transaction(store, mode); const s = t.objectStore(store); const out = fn(s); t.oncomplete = () => res(out instanceof IDBRequest ? out.result : out); t.onerror = () => rej(t.error); });
 }
+export const getPack = (k) => tx('readonly', (s) => s.get(k), PACKS);
+export const putPack = (k, v) => tx('readwrite', (s) => s.put(v, k), PACKS);
+export const delPack = (k) => tx('readwrite', (s) => s.delete(k), PACKS);
+export const packKeys = () => tx('readonly', (s) => s.getAllKeys(), PACKS);
 export const putSlot = (key, obj) => tx('readwrite', (s) => s.put(obj, key));
 export const getSlot = (key) => tx('readonly', (s) => s.get(key));
 export const delSlot = (key) => tx('readwrite', (s) => s.delete(key));
