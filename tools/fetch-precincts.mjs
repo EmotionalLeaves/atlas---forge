@@ -10,13 +10,24 @@ import zlib from 'zlib';
 import { execFileSync } from 'child_process';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
-import { readDBF, readSHP, makeUnproject } from './lib-shp.mjs';
+import { readSHP, makeUnproject } from './lib-shp.mjs';
+
+// DBF reader that copes with long text fields (their length uses the 'decimals' byte as a high byte), which
+// otherwise shifts every following column and turns vote counts into zeros
+function readDBF(p) {
+  const b = fs.readFileSync(p), n = b.readUInt32LE(4), hl = b.readUInt16LE(8), rl = b.readUInt16LE(10);
+  const parse = (wide) => { const fields = []; let o = 32, off = 1; while (b[o] !== 0x0d && o < hl) { const name = b.toString('latin1', o, o + 11).replace(/\0.*$/, ''); const type = String.fromCharCode(b[o + 11]); const len = b[o + 16] + (wide && type === 'C' ? b[o + 17] * 256 : 0); fields.push({ name, type, len, off }); off += len; o += 32; } return { fields, size: off }; };
+  let F = parse(false); if (F.size !== rl) { const G = parse(true); if (G.size === rl) F = G; }
+  const rows = [];
+  for (let r = 0; r < n; r++) { const ro = hl + r * rl, row = {}; for (const f of F.fields) { const s = b.toString('latin1', ro + f.off, ro + f.off + f.len).trim(); row[f.name] = f.type === 'C' && !/^-?[\d.]+$/.test(s) ? s : (s === '' ? null : Number(s)); } rows.push(row); }
+  return { fields: F.fields, rows };
+}
 
 const OUT = process.argv[2], TMP = process.argv[3] || path.join(OUT, '..', 'prectmp');
 fs.mkdirSync(OUT, { recursive: true }); fs.mkdirSync(TMP, { recursive: true });
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const AB = { AL: '01', AK: '02', AZ: '04', AR: '05', CA: '06', CO: '08', CT: '09', DE: '10', DC: '11', FL: '12', GA: '13', HI: '15', ID: '16', IL: '17', IN: '18', IA: '19', KS: '20', KY: '21', LA: '22', ME: '23', MD: '24', MA: '25', MI: '26', MN: '27', MS: '28', MO: '29', MT: '30', NE: '31', NV: '32', NH: '33', NJ: '34', NM: '35', NY: '36', NC: '37', ND: '38', OH: '39', OK: '40', OR: '41', PA: '42', RI: '44', SC: '45', SD: '46', TN: '47', TX: '48', UT: '49', VT: '50', VA: '51', WA: '53', WV: '54', WI: '55', WY: '56' };
-const OFFICE = { PRE: 'President', USS: 'US Senate', USH: 'US House', HAL: 'US House (at-large)', COU: 'City Council', UBR: 'University Regents', SBE: 'Board of Education', GOV: 'Governor', LTG: 'Lieutenant Governor', ATG: 'Attorney General', SOS: 'Secretary of State', TRE: 'Treasurer', AUD: 'Auditor', CON: 'Controller', COM: 'Comptroller', AGR: 'Agriculture Commissioner', INS: 'Insurance Commissioner', LAB: 'Labor Commissioner', SPI: 'Superintendent of Schools', LND: 'Land Commissioner', RRC: 'Railroad Commissioner', PSC: 'Public Service Commission', SSC: 'State Supreme Court', SCC: 'Corporation Commission', CFO: 'Chief Financial Officer', MNI: 'Mine Inspector', SBE: 'Board of Education', REG: 'University Regents', SAC: 'Supreme Court', SPR: 'Supreme Court', TAX: 'Tax Commissioner', CPA: 'Comptroller', PUC: 'Public Utilities Commission', HOU: 'US House' };
+const OFFICE = { HOD: 'State House (all seats)', SEN: 'State Senate (all seats)', STH: 'State House (all seats)', STS: 'State Senate (all seats)', PRE: 'President', USS: 'US Senate', USH: 'US House', HAL: 'US House (at-large)', COU: 'City Council', UBR: 'University Regents', SBE: 'Board of Education', GOV: 'Governor', LTG: 'Lieutenant Governor', ATG: 'Attorney General', SOS: 'Secretary of State', TRE: 'Treasurer', AUD: 'Auditor', CON: 'Controller', COM: 'Comptroller', AGR: 'Agriculture Commissioner', INS: 'Insurance Commissioner', LAB: 'Labor Commissioner', SPI: 'Superintendent of Schools', LND: 'Land Commissioner', RRC: 'Railroad Commissioner', PSC: 'Public Service Commission', SSC: 'State Supreme Court', SCC: 'Corporation Commission', CFO: 'Chief Financial Officer', MNI: 'Mine Inspector', SBE: 'Board of Education', REG: 'University Regents', SAC: 'Supreme Court', SPR: 'Supreme Court', TAX: 'Tax Commissioner', CPA: 'Comptroller', PUC: 'Public Utilities Commission', HOU: 'US House' };
 const UA = { 'User-Agent': 'AtlasForge-build (github.com/EmotionalLeaves/atlas---forge)' };
 
 async function getJSON(url) { for (let k = 0; k < 4; k++) { try { const r = await fetch(url, { headers: UA }); if (r.ok) return await r.json(); log('HTTP', r.status, url); } catch (e) { log('ERR', e.message, url); } await new Promise((s) => setTimeout(s, 3000 * (k + 1))); } return null; }
@@ -46,14 +57,38 @@ function packRings(rings) {
 }
 function save(fips, name, obj) { const d = path.join(OUT, fips); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, name + '.json.gz'), zlib.gzipSync(JSON.stringify(obj), { level: 6 })); }
 
+// projections: the shared ones, plus Hotine oblique Mercator (Michigan GeoRef), EPSG method 9812
+function unprojector(wkt) { try { return makeUnproject(wkt); } catch (e) { if (/Hotine/i.test(wkt)) return hotine(wkt); throw e; } }
+export function hotine(wkt, forward = false) {
+  const num = (k) => { const m = wkt.match(new RegExp('PARAMETER\\["' + k + '",\\s*([-\\d.eE]+)', 'i')); return m ? +m[1] : null; };
+  const unit = /Foot_US|US survey foot/i.test(wkt) ? 1200 / 3937 : /Foot/i.test(wkt) ? 0.3048 : 1, d2r = Math.PI / 180;
+  const sph = wkt.match(/SPHEROID\["[^"]*",\s*([\d.]+),\s*([\d.]+)/i), a = sph ? +sph[1] : 6378137, invf = sph ? +sph[2] : 298.257222101, f = 1 / invf, e2 = 2 * f - f * f, e = Math.sqrt(e2);
+  const FE = (num('False_Easting') || 0) * unit, FN = (num('False_Northing') || 0) * unit, k0 = num('Scale_Factor') || 1;
+  const ac = (num('Azimuth') || 0) * d2r, lc = (num('Longitude_Of_Center') ?? num('Longitude_Of_Origin') ?? 0) * d2r, pc = (num('Latitude_Of_Center') ?? num('Latitude_Of_Origin') ?? 0) * d2r;
+  const B = Math.sqrt(1 + e2 * Math.cos(pc) ** 4 / (1 - e2)), A = a * B * k0 * Math.sqrt(1 - e2) / (1 - e2 * Math.sin(pc) ** 2);
+  const tf = (p) => Math.tan(Math.PI / 4 - p / 2) / Math.pow((1 - e * Math.sin(p)) / (1 + e * Math.sin(p)), e / 2);
+  const t0 = tf(pc); let D = B * Math.sqrt(1 - e2) / (Math.cos(pc) * Math.sqrt(1 - e2 * Math.sin(pc) ** 2)); if (D < 1) D = 1;
+  const F = D + Math.sign(pc || 1) * Math.sqrt(D * D - 1), H = F * Math.pow(t0, B), G = (F - 1 / F) / 2, g0 = Math.asin(Math.sin(ac) / D), l0 = lc - Math.asin(G * Math.tan(g0)) / B, gc = ac;
+  if (forward) return (lon, lat) => { const p = lat * d2r, l = lon * d2r, Q = H / Math.pow(tf(p), B), S = (Q - 1 / Q) / 2, T = (Q + 1 / Q) / 2, V = Math.sin(B * (l - l0)), U = (-V * Math.cos(g0) + S * Math.sin(g0)) / T;
+    const v = A * Math.log((1 - U) / (1 + U)) / (2 * B), u = A * Math.atan2(S * Math.cos(g0) + V * Math.sin(g0), Math.cos(B * (l - l0))) / B; return [(v * Math.cos(gc) + u * Math.sin(gc) + FE) / unit, (u * Math.cos(gc) - v * Math.sin(gc) + FN) / unit]; };
+  return (X, Y) => {
+    const E = X * unit - FE, N = Y * unit - FN, v = E * Math.cos(gc) - N * Math.sin(gc), u = N * Math.cos(gc) + E * Math.sin(gc);
+    const Qp = Math.exp(-B * v / A), Sp = (Qp - 1 / Qp) / 2, Tp = (Qp + 1 / Qp) / 2, Vp = Math.sin(B * u / A), Up = (Vp * Math.cos(g0) + Sp * Math.sin(g0)) / Tp;
+    const tp = Math.pow(H / Math.sqrt((1 + Up) / (1 - Up)), 1 / B), chi = Math.PI / 2 - 2 * Math.atan(tp);
+    const p = chi + Math.sin(2 * chi) * (e2 / 2 + 5 * e2 ** 2 / 24 + e2 ** 3 / 12 + 13 * e2 ** 4 / 360) + Math.sin(4 * chi) * (7 * e2 ** 2 / 48 + 29 * e2 ** 3 / 240 + 811 * e2 ** 4 / 11520) + Math.sin(6 * chi) * (7 * e2 ** 3 / 120 + 81 * e2 ** 4 / 1120) + Math.sin(8 * chi) * (4279 * e2 ** 4 / 161280);
+    const l = l0 - Math.atan2(Sp * Math.cos(g0) - Vp * Math.sin(g0), Math.cos(B * u / A)) / B;
+    return [l / d2r, p / d2r];
+  };
+}
+
 // ---- VEST: every general (and special) statewide race in a state's precinct shapefile ----
 function vestFile(shp, year) {
   const base = shp.slice(0, -4), { fields, rows } = readDBF(base + '.dbf'), shapes = readSHP(shp);
   const prj = fs.existsSync(base + '.prj') ? fs.readFileSync(base + '.prj', 'utf8') : '';
-  const un = prj ? makeUnproject(prj) : (x, y) => [x, y];
+  const un = prj ? unprojector(prj) : (x, y) => [x, y];
   const yy = String(year).slice(2), cols = new Map();
   for (const f of fields) {
-    const m = /^([GS])(\d\d)([A-Z]{3})([A-Z])([A-Z0-9]{1,3})$/.exec(f.name); if (!m || m[2] !== yy || !(f.type === 'N' || f.type === 'F')) continue;
+    const m = /^([GS])(\d\d)([A-Z]{3})([A-Z])([A-Za-z0-9]{1,3})$/.exec(f.name); if (!m || m[2] !== yy) continue; // numbers are sometimes stored as text
     const key = m[1] + m[3]; if (!cols.has(key)) cols.set(key, { code: m[3], special: m[1] === 'S', d: [], r: [], o: [] });
     const c = cols.get(key); (m[4] === 'D' ? c.d : m[4] === 'R' ? c.r : c.o).push(f.name);
   }
