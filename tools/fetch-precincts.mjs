@@ -18,8 +18,8 @@ function readDBF(p) {
   const b = fs.readFileSync(p), n = b.readUInt32LE(4), hl = b.readUInt16LE(8), rl = b.readUInt16LE(10);
   const parse = (wide) => { const fields = []; let o = 32, off = 1; while (b[o] !== 0x0d && o < hl) { const name = b.toString('latin1', o, o + 11).replace(/\0.*$/, ''); const type = String.fromCharCode(b[o + 11]); const len = b[o + 16] + (wide && type === 'C' ? b[o + 17] * 256 : 0); fields.push({ name, type, len, off }); off += len; o += 32; } return { fields, size: off }; };
   let F = parse(false); if (F.size !== rl) { const G = parse(true); if (G.size === rl) F = G; }
-  const rows = [];
-  for (let r = 0; r < n; r++) { const ro = hl + r * rl, row = {}; for (const f of F.fields) { const s = b.toString('latin1', ro + f.off, ro + f.off + f.len).trim(); row[f.name] = f.type === 'C' && !/^-?[\d.]+$/.test(s) ? s : (s === '' ? null : Number(s)); } rows.push(row); }
+  const rows = []; // (some files pad numbers with NUL bytes instead of spaces)
+  for (let r = 0; r < n; r++) { const ro = hl + r * rl, row = {}; for (const f of F.fields) { const s = b.toString('latin1', ro + f.off, ro + f.off + f.len).replace(/\0/g, '').trim(); row[f.name] = f.type === 'C' && !/^-?[\d.]+$/.test(s) ? s : (s === '' ? null : Number(s)); } rows.push(row); }
   return { fields: F.fields, rows };
 }
 
