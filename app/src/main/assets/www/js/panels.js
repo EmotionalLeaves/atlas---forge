@@ -851,22 +851,36 @@ function newPlanForm(inModal) {
   const st = { name: 'Plan ' + (W.plans.length + 1), unit: 'precincts', scope: U.countries.findIndex((c) => c.a3 === 'USA') + 1, n: 10, random: false, pack: app.precinctPreset || 'PA', real: -1 }; app.precinctPreset = null;
   const scopeSel = h('select', { onchange: (e) => { st.scope = +e.target.value; } },
     h('option', { value: 0 }, 'Whole world'), [...U.countries.map((c, k) => [c.name, k + 1])].sort().map(([n, v]) => h('option', { value: v, selected: v === st.scope }, n)));
-  const packSel = h('select', { onchange: (e) => { st.pack = e.target.value; showPack(); } });
+  // any of the 50 states (+ DC): real precincts where we have them, otherwise 2020 census voting districts,
+  // block groups or tracts — like Districtr 2
+  const stateSel = h('select', { onchange: () => fillUnits() }), unitSel = h('select', { onchange: () => { st.pack = unitSel.value; showPack(); } });
   const packInfo = h('div', { class: 'muted small' });
-  const realSel = h('select', { onchange: (e) => { st.real = +e.target.value; } });
+  const realSel = h('select', { onchange: (e) => { st.real = +e.target.value; } }), realRow = h('label', null, 'Start from', realSel);
   const nInput = h('input', { type: 'number', min: 2, max: 435, value: st.n, oninput: (e) => { st.n = clamp(+e.target.value || 2, 2, 435); } });
-  let packs = [];
-  const showPack = () => {
-    const m = packs.find((x) => x.state === st.pack); if (!m) return;
-    packInfo.textContent = `${m.count.toLocaleString()} precincts · ${fmt(m.pop)} people (2010) · ${m.elections.length} elections · ${(m.bytes / 1048576).toFixed(1)} MB download (once)`;
-    realSel.innerHTML = ''; realSel.append(h('option', { value: -1 }, 'Blank — draw it yourself'), ...m.plans.map((pl, k) => h('option', { value: k }, `${pl.label} (${pl.n} districts)`)));
-    st.real = -1;
-    const cong = m.plans.find((pl) => /^Congress/.test(pl.label)); if (cong) { st.n = cong.n; nInput.value = cong.n; }
-    if (!st.custom && st.unit === 'precincts') { st.name = `${m.title} plan`; nameIn.value = st.name; }
+  let packs = [], usLv = [];
+  const preset = US_STATES.find((x) => x[1] === st.pack) || US_STATES.find((x) => x[1] === 'PA');
+  stateSel.append(...US_STATES.map(([f, ab, name]) => h('option', { value: f, selected: f === preset[0] }, name)));
+  const fillUnits = () => {
+    const [f, ab, name, seats] = US_STATES.find((x) => x[0] === stateSel.value), opts = [];
+    const mg = packs.find((x) => x.state === ab); if (mg) opts.push([ab, `Precincts with real election results (${mg.count.toLocaleString()})`]);
+    for (const [L, label] of [[5, 'Voting districts, 2020 census'], [4, 'Census block groups'], [3, 'Census tracts']]) { const m = usLv.find((x) => x.level === L), part = m && m.parts.find((p) => p.key === `USA_${L}_${f}`); if (part) opts.push(['L:' + part.key, `${label} (${part.count.toLocaleString()})`]); }
+    unitSel.innerHTML = ''; unitSel.append(...opts.map(([v, l]) => h('option', { value: v }, l)));
+    if (!opts.length) unitSel.append(h('option', { value: '' }, 'Not available in this build'));
+    st.pack = unitSel.value; st.n = seats; nInput.value = seats;
+    if (!st.custom && st.unit === 'precincts') { st.name = `${name} plan`; nameIn.value = st.name; }
+    showPack();
   };
-  packList().then((list) => { packs = list; packSel.append(...list.map((m) => h('option', { value: m.state, selected: m.state === st.pack }, m.title))); showPack(); });
+  const showPack = () => {
+    const m = packs.find((x) => x.state === st.pack);
+    realRow.style.display = m ? '' : 'none'; st.real = -1;
+    if (m) {
+      packInfo.textContent = `${m.elections.length} real elections (2010 census populations).`;
+      realSel.innerHTML = ''; realSel.append(h('option', { value: -1 }, 'Blank — draw it yourself'), ...m.plans.map((pl, k) => h('option', { value: k }, `${pl.label} (${pl.n} districts)`)));
+    } else packInfo.textContent = st.pack ? '2020 census population and race. Votes are county presidential results spread by voting-age population (estimates).' : '';
+  };
+  Promise.all([packList(), levelList()]).then(([list, L]) => { packs = list; usLv = L.filter((m) => m.iso === 'USA' && m.byState && !m.precincts); fillUnits(); });
   const nameIn = h('input', { value: st.name, oninput: (e) => { st.name = e.target.value; st.custom = true; } });
-  const pctRows = h('div', null, h('label', null, 'State', packSel), packInfo, h('label', null, 'Start from', realSel));
+  const pctRows = h('div', null, h('label', null, 'State', stateSel), h('label', null, 'Build from', unitSel), packInfo, realRow);
   // admin areas of any country, any level
   // levels split by state (US tracts / block groups) draw one state at a time
   const admCountry = h('select', { onchange: () => fillLevels() }), admLevel = h('select', { onchange: () => fillParts() }), admPart = h('select', { onchange: () => { st.adm = admPart.value; admInfo(); } }), admNote = h('div', { class: 'muted small' });
@@ -919,22 +933,27 @@ function newPlanForm(inModal) {
     btn('Create plan', async (e) => {
       const button = e.currentTarget; button.disabled = true;
       try {
-        if (st.unit === 'admin') { const m = curLevel(); if (!m || !st.adm) throw new Error('Pick a country and level'); const part = m.byState ? m.parts.find((p) => 'L:' + p.key === st.adm) : null; if ((part ? part.count : m.count) > 60000) throw new Error('That level has too many areas for a phone — pick a higher level'); st.unit = 'precincts'; st.pack = st.adm; }
-        if (st.unit === 'precincts') { status.textContent = 'Loading…'; await usePack(st.pack, (fr, t) => { status.textContent = t; }); }
-        const p = newPlan(W, { name: st.name || 'Plan', unit: st.unit, scope: st.unit === 'counties' ? U.countries.findIndex((c) => c.a3 === 'USA') + 1 : st.scope, n: st.n, pack: st.pack });
+        // work on copies so a failed load leaves the form as it was
+        let unit = st.unit, pack = st.pack;
+        if (unit === 'admin') { const m = curLevel(); if (!m || !st.adm) throw new Error('Pick a country and level'); const part = m.byState ? m.parts.find((p) => 'L:' + p.key === st.adm) : null; if ((part ? part.count : m.count) > 60000) throw new Error('That level has too many areas for a phone. Pick a higher level'); unit = 'precincts'; pack = st.adm; }
+        if (unit === 'precincts' && !pack) throw new Error('No map data for that state in this build');
+        if (unit === 'precincts') { status.textContent = 'Loading…'; await usePack(pack, (fr, t) => { status.textContent = t; }); }
+        const p = newPlan(W, { name: st.name || 'Plan', unit, scope: unit === 'counties' ? U.countries.findIndex((c) => c.a3 === 'USA') + 1 : st.scope, n: st.n, pack });
         app.admPreset = null; app.admPresetLevel = null; app.admPresetPart = null;
-        if (st.unit === 'precincts' && st.real >= 0) applyRealPlan(W, p, st.real); else if (st.random) randomPlan(W, p);
+        if (unit === 'precincts' && st.unit === 'precincts' && st.real >= 0) applyRealPlan(W, p, st.real); else if (st.random) randomPlan(W, p);
         app.activePlan = p.id; app.district = 0; app.tool = 'brush'; rebuildCatalog(); closeModal(); computePlanStats(); refresh(); refreshPanels();
-        if (st.unit === 'precincts') { const b = W.D.packs[st.pack].bbox; app.R.fitBounds(b[0], b[1], b[2], b[3]); }
+        if (unit === 'precincts') { const b = W.D.packs[pack].bbox; app.R.fitBounds(b[0], b[1], b[2], b[3]); }
         else if (p.scope) { const c = U.countries[p.scope - 1]; const n = W.nations[p.scope]; if (n && n.alive) zoomToNation(n); else app.R.flyTo(c.label[0], c.label[1]); }
       } catch (err) { status.textContent = err.message; toast(err.message, 5000); button.disabled = false; }
     }, 'primary wide'));
   return f;
 }
+// [FIPS, postal code, name, US House seats after the 2020 census]
+const US_STATES = [['01','AL','Alabama',7],['02','AK','Alaska',1],['04','AZ','Arizona',9],['05','AR','Arkansas',4],['06','CA','California',52],['08','CO','Colorado',8],['09','CT','Connecticut',5],['10','DE','Delaware',1],['11','DC','District of Columbia',1],['12','FL','Florida',28],['13','GA','Georgia',14],['15','HI','Hawaii',2],['16','ID','Idaho',2],['17','IL','Illinois',17],['18','IN','Indiana',9],['19','IA','Iowa',4],['20','KS','Kansas',4],['21','KY','Kentucky',6],['22','LA','Louisiana',6],['23','ME','Maine',2],['24','MD','Maryland',8],['25','MA','Massachusetts',9],['26','MI','Michigan',13],['27','MN','Minnesota',8],['28','MS','Mississippi',4],['29','MO','Missouri',8],['30','MT','Montana',2],['31','NE','Nebraska',3],['32','NV','Nevada',4],['33','NH','New Hampshire',2],['34','NJ','New Jersey',12],['35','NM','New Mexico',3],['36','NY','New York',26],['37','NC','North Carolina',14],['38','ND','North Dakota',1],['39','OH','Ohio',15],['40','OK','Oklahoma',5],['41','OR','Oregon',6],['42','PA','Pennsylvania',17],['44','RI','Rhode Island',2],['45','SC','South Carolina',7],['46','SD','South Dakota',1],['47','TN','Tennessee',9],['48','TX','Texas',38],['49','UT','Utah',4],['50','VT','Vermont',1],['51','VA','Virginia',11],['53','WA','Washington',10],['54','WV','West Virginia',2],['55','WI','Wisconsin',8],['56','WY','Wyoming',1]];
 // The unit choice as big, described options (the select stays as the source of truth).
 const UNIT_INFO = [
-  ['precincts', 'US voting precincts', 'Real election results for 28 states, closest to Districtr'],
-  ['admin', 'Local areas anywhere', 'Any country’s states, districts or towns, or US census tracts and block groups'],
+  ['precincts', 'A US state', 'All 50 states: real precincts where available, otherwise 2020 voting districts, block groups or tracts'],
+  ['admin', 'Local areas anywhere', 'Any country’s regions, districts, towns or villages'],
   ['counties', 'US counties', 'All 3,221 counties with census population'],
   ['provinces', 'Provinces and states', 'For any country or the whole world'],
   ['cells', 'World grid', 'Free-form squares; these plans decide the simulation’s elections'],

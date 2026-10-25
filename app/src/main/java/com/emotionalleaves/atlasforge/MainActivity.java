@@ -85,7 +85,12 @@ public class MainActivity extends Activity {
                 headers.put("Cache-Control", "no-cache");
                 headers.put("Access-Control-Allow-Origin", "*");
                 try {
-                    InputStream in = getAssets().open("www" + path);
+                    InputStream in;
+                    try { in = getAssets().open("www" + path); }
+                    catch (IOException e) { // older builds: Android's packager stored foo.afp.gz as foo.afp (un-gzipped)
+                        if (!path.endsWith(".gz")) throw e;
+                        in = getAssets().open("www" + path.substring(0, path.length() - 3));
+                    }
                     return new WebResourceResponse(mime, mime.startsWith("text") || mime.endsWith("json") || mime.endsWith("javascript") ? "utf-8" : null, 200, "OK", headers, in);
                 } catch (IOException e) {
                     return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found", headers, new ByteArrayInputStream(new byte[0]));

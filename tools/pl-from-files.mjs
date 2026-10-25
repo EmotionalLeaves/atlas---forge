@@ -15,7 +15,7 @@ const lines = (f) => readline.createInterface({ input: fs.createReadStream(f, { 
 const want = new Map(); // logrecno -> { lev, geo }
 for await (const L of lines(geoF)) {
   const f = L.split('|'); const lev = f[2];
-  if ((lev !== '140' && lev !== '150') || f[4] !== '00') continue;
+  if ((lev !== '140' && lev !== '150' && lev !== '700') || f[4] !== '00') continue;
   const id = f[8] || ''; const geo = id.includes('US') ? id.slice(id.indexOf('US') + 2) : (f[9] || '');
   want.set(f[7], { lev, geo, v: new Array(12).fill(0) });
 }
@@ -29,14 +29,16 @@ for (const [seg, file] of [[1, seg1F], [2, seg2F]]) {
   }
 }
 const H = VARS.map((v) => v[0]);
-const tract = [[...H, 'state', 'county', 'tract']], bg = [[...H, 'state', 'county', 'tract', 'block group']];
+const tract = [[...H, 'state', 'county', 'tract']], bg = [[...H, 'state', 'county', 'tract', 'block group']], vtd = [[...H, 'state', 'county', 'voting district']];
 for (const r of want.values()) {
   const g = r.geo; if (g.length < 11) continue;
   const vals = r.v.map(String);
+  if (r.lev === '700') { vtd.push([...vals, g.slice(0, 2), g.slice(2, 5), g.slice(5)]); continue; }
   if (r.lev === '140') tract.push([...vals, g.slice(0, 2), g.slice(2, 5), g.slice(5, 11)]);
   else bg.push([...vals, g.slice(0, 2), g.slice(2, 5), g.slice(5, 11), g.slice(11, 12)]);
 }
 fs.mkdirSync(OUT, { recursive: true });
 fs.writeFileSync(path.join(OUT, `tract_${FIPS}.json`), JSON.stringify(tract));
 fs.writeFileSync(path.join(OUT, `bg_${FIPS}.json`), JSON.stringify(bg));
-console.log(FIPS, 'tracts', tract.length - 1, 'block groups', bg.length - 1, 'pop', tract.slice(1).reduce((s, r) => s + +r[0], 0));
+if (vtd.length > 1) fs.writeFileSync(path.join(OUT, `vtd_${FIPS}.json`), JSON.stringify(vtd));
+console.log(FIPS, 'tracts', tract.length - 1, 'block groups', bg.length - 1, 'voting districts', vtd.length - 1, 'pop', tract.slice(1).reduce((s, r) => s + +r[0], 0));

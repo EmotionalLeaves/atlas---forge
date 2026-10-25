@@ -19,7 +19,10 @@ async function load() {
   if (u8[0] === 0x1f && u8[1] === 0x8b) buf = await new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
   const hl = new DataView(buf).getUint32(4, true), H = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, hl)));
   const base = 8 + hl + ((8 - ((8 + hl) % 8)) % 8), T = { Float32Array, Uint32Array };
-  for (const L of H.layers) { L.posA = new T[L.pos.t](buf, base + L.pos.o, L.pos.n); if (L.start) L.startA = new T[L.start.t](buf, base + L.start.o, L.start.n); if (L.idx) L.idxA = new T[L.idx.t](buf, base + L.idx.o, L.idx.n); L.segs = L.startA ? L.posA.length / 2 - (L.startA.length - 1) : 0; }
+  const dec = (u8, n) => { const out = new Float32Array(n * 2); let i = 0, x = 0, y = 0; const rd = () => { let v = 0, m = 1, b; do { b = u8[i++]; v += (b & 127) * m; m *= 128; } while (b & 128); return v % 2 ? -(v + 1) / 2 : v / 2; };
+    for (let k = 0; k < n; k++) { x += rd(); y += rd(); out[k * 2] = x / H.q; out[k * 2 + 1] = y / H.q; } return out; };
+  const T2 = { ...T, Uint8Array };
+  for (const L of H.layers) { L.posA = H.v >= 2 ? dec(new Uint8Array(buf, base + L.pos.o, L.pos.n), L.n) : new T2[L.pos.t](buf, base + L.pos.o, L.pos.n); if (L.start) L.startA = new T[L.start.t](buf, base + L.start.o, L.start.n); if (L.idx) L.idxA = new T[L.idx.t](buf, base + L.idx.o, L.idx.n); L.segs = L.startA ? L.posA.length / 2 - (L.startA.length - 1) : 0; }
   REF.H = H;
 }
 function wantedLayers(app) {

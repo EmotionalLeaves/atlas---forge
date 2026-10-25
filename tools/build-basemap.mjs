@@ -70,17 +70,20 @@ for (const f of rd('ne_10m_urban_areas')) {
 // ---- write ----
 const blobs = []; let off = 0;
 const blob = (ta) => { const pad = (8 - (off % 8)) % 8; if (pad) { blobs.push(Buffer.alloc(pad)); off += pad; } const b = Buffer.from(ta.buffer, ta.byteOffset, ta.byteLength); blobs.push(b); const ref = { t: ta.constructor.name, o: off, n: ta.length }; off += b.byteLength; return ref; };
+const QB = 2 ** 23; // ~4.8 m
+const vpos = (flat) => { const out = []; let px = 0, py = 0; const put = (v) => { v = v < 0 ? -2 * v - 1 : 2 * v; while (v >= 128) { out.push((v % 128) | 128); v = Math.floor(v / 128); } out.push(v); };
+  for (let k = 0; k < flat.length; k += 2) { const x = Math.round(flat[k] * QB), y = Math.round(flat[k + 1] * QB); put(x - px); put(y - py); px = x; py = y; } return Uint8Array.from(out); };
 const layers = [];
 for (const B of [...buckets.values()].sort((a, b) => a.z - b.z)) {
   const pos = [], start = [];
   for (const s of B.strips) { start.push(pos.length / 2); for (const [x, y] of s) { const m = merc(x, y); pos.push(m[0], m[1]); } }
   start.push(pos.length / 2);
-  layers.push({ kind: 'line', cls: B.cls, z: B.z, cell: B.cell, bbox: B.bb, pos: blob(Float32Array.from(pos)), start: blob(Uint32Array.from(start)) });
+  layers.push({ kind: 'line', cls: B.cls, z: B.z, cell: B.cell, bbox: B.bb, n: pos.length / 2, pos: blob(vpos(pos)), start: blob(Uint32Array.from(start)) });
 }
-for (const [z, U] of [...urban.entries()].sort((a, b) => a[0] - b[0])) layers.push({ kind: 'poly', cls: 'urban', z, cell: -1, bbox: [-180, -90, 180, 90], pos: blob(Float32Array.from(U.pos)), idx: blob(Uint32Array.from(U.idx)) });
-const header = { format: 'afb', v: 1, source: 'Natural Earth 10m (public domain)', layers };
+for (const [z, U] of [...urban.entries()].sort((a, b) => a[0] - b[0])) layers.push({ kind: 'poly', cls: 'urban', z, cell: -1, bbox: [-180, -90, 180, 90], n: U.pos.length / 2, pos: blob(vpos(U.pos)), idx: blob(Uint32Array.from(U.idx)) });
+const header = { format: 'afb', v: 2, q: QB, source: 'Natural Earth 10m (public domain)', layers };
 const hj = Buffer.from(JSON.stringify(header)); const pre = Buffer.alloc(8); pre.write('AFB1', 0); pre.writeUInt32LE(hj.length, 4);
 const pad = Buffer.alloc((8 - ((8 + hj.length) % 8)) % 8);
 fs.writeFileSync(OUTF, zlib.gzipSync(Buffer.concat([pre, hj, pad, ...blobs]), { level: 9 }));
-const tot = layers.reduce((s, L) => s + L.pos.n / 2, 0);
+const tot = layers.reduce((s, L) => s + L.n, 0);
 console.log('layers', layers.length, 'points', tot, 'bytes', fs.statSync(OUTF).size);

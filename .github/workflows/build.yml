@@ -29,7 +29,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: app/src/main/assets/www/levels
-          key: levels-v1-${{ hashFiles('tools/build-levels.mjs', 'tools/build-data.mjs', 'tools/build-us.mjs', 'tools/lib-shp.mjs', 'tools/gb-list.txt', 'tools/gb-meta.json', 'tools/ci-levels.sh', 'tools/ci-us.sh') }}
+          key: levels-v2-${{ hashFiles('tools/build-levels.mjs', 'tools/build-data.mjs', 'tools/build-us.mjs', 'tools/lib-shp.mjs', 'tools/gb-list.txt', 'tools/gb-meta.json', 'tools/ci-levels.sh', 'tools/ci-us.sh', 'tools/compact-packs.mjs') }}
 
       - name: Restore raw downloads
         if: steps.lvcache.outputs.cache-hit != 'true'
@@ -52,6 +52,12 @@ jobs:
         run: |
           set -o pipefail
           bash tools/ci-us.sh 2>&1 | tee -a data.log
+
+      - name: Compact map data
+        if: steps.lvcache.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          node --max-old-space-size=8000 tools/compact-packs.mjs --afz app/src/main/assets/www/levels 2>&1 | tee -a data.log
 
       - name: Save map data
         if: steps.lvcache.outputs.cache-hit != 'true' && steps.us.outcome == 'success'

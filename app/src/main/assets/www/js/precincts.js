@@ -1,5 +1,6 @@
 // Real US precinct data packs (from MGGG States): downloaded once per state, then kept on the device.
 import { getPack, putPack } from './store.js';
+import { decodeV2, decodeAdj, decodeCenters } from './afpv2.js';
 
 // Bundled in the app first; the online copies are only a fallback.
 export const PACK_SOURCES = [
@@ -14,7 +15,7 @@ export async function packList() {
   return manifest;
 }
 
-const TYPES = { Float32Array, Uint16Array, Int16Array, Uint8Array, Uint32Array, Int32Array };
+const TYPES = { Float32Array, Uint16Array, Int16Array, Uint8Array, Uint32Array, Int32Array, Float64Array };
 async function gunzip(buf) {
   const u8 = new Uint8Array(buf);
   if (u8[0] !== 0x1f || u8[1] !== 0x8b) return buf;
@@ -39,14 +40,15 @@ export function parsePack(raw) {
     area: get(H.area), perim: get(H.perim),
   };
   // geometry -> world coordinates
-  const g = H.geom, pos = Float32Array.from(get(g.pos)), lpos = Float32Array.from(get(g.lpos));
+  const g = H.geom, G = g.enc === 'v2' ? decodeV2(g, get) : null;
+  const pos = G ? G.pos : Float32Array.from(get(g.pos)), lpos = G ? G.lpos : Float32Array.from(get(g.lpos));
   for (let k = 0; k < pos.length; k += 2) { pos[k] += ox; pos[k + 1] += oy; }
   for (let k = 0; k < lpos.length; k += 2) { lpos[k] += ox; lpos[k + 1] += oy; }
-  P.geom = { pos, uid: get(g.uid), idx: get(g.idx), lpos, luid: get(g.luid), lnb: get(g.lnb) };
-  const c = get(H.center); P.cx = new Float64Array(n); P.cy = new Float64Array(n);
+  P.geom = G ? { pos, uid: G.uid, idx: G.idx, lpos, luid: G.luid, lnb: G.lnb } : { pos, uid: get(g.uid), idx: get(g.idx), lpos, luid: get(g.luid), lnb: get(g.lnb) };
+  const c = H.centerEnc === 'v2' ? decodeCenters(get(H.center), n, H.centerQ) : get(H.center); P.cx = new Float64Array(n); P.cy = new Float64Array(n);
   for (let u = 0; u < n; u++) { P.cx[u] = c[u * 2] + ox; P.cy[u] = c[u * 2 + 1] + oy; }
   // adjacency lists [neighbour, km, neighbour, km, ...]
-  const A = get(H.adj), AL = get(H.adjLen); P.adj = Array.from({ length: n }, () => []);
+  const A = H.adjEnc === 'v2' ? decodeAdj(get(H.adj), H.adjN) : get(H.adj), AL = get(H.adjLen); P.adj = Array.from({ length: n }, () => []);
   for (let k = 0; k < A.length; k += 2) { const a = A[k], b = A[k + 1], L = AL[k / 2]; P.adj[a].push(b, L); P.adj[b].push(a, L); }
   // units look like provinces/counties to the rest of the app
   P.units = Array.from({ length: n }, (_, u) => ({ n: P.names[u] || `${P.kind === 'admin' ? 'Area' : 'Precinct'} ${P.ids[u] || u + 1}`, pop: P.pop[u], area: P.area[u], perim: P.perim[u] }));
@@ -70,10 +72,8 @@ export async function usList() { if (usMf) return usMf; try { usMf = await (awai
 
 // key formats: 'PA' (precincts), 'L:FRA_2' (admin level, may have parts), 'T:42' (US tracts), 'B:42' (US block groups)
 export function packPath(key) {
-  if (key.startsWith('L:')) return 'levels/' + key.slice(2) + '.afp.gz';
-  if (key.startsWith('T:')) return 'us/tract_' + key.slice(2) + '.afp.gz';
-  if (key.startsWith('B:')) return 'us/bg_' + key.slice(2) + '.afp.gz';
-  return 'packs/' + key + '.afp.gz';
+  if (key.startsWith('L:')) return 'levels/' + key.slice(2) + '.afz';
+  return 'packs/' + key + '.afz';
 }
 async function fetchRaw(rel, progress, label) {
   const res = await fetch(rel); if (!res.ok) throw new Error('HTTP ' + res.status);

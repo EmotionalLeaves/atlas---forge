@@ -1,6 +1,7 @@
 // Builds US census tracts (USA level 3) and block groups (USA level 4) for every state from the
 // Census Bureau 2020 cartographic boundary files + 2020 redistricting (PL 94-171) counts.
-// Usage: node --max-old-space-size=8000 tools/build-us.mjs <earcut.js> <tractShpDir> <bgShpDir> <plDir> <outDir>
+// Usage: node --max-old-space-size=8000 tools/build-us.mjs <earcut.js> <tractShpDir> <bgShpDir> <plDir> <outDir> [fpop.bin] [vtdShpDir] [electionCsvDir]
+//   vtdShpDir: TIGER 2020 voting districts (tl_2020_XX_vtd20) -> USA level 5; electionCsvDir: county presidential results
 //   plDir holds tract_<FIPS>.json / bg_<FIPS>.json straight from api.census.gov (array of rows, header first).
 // Output: <outDir>/USA_3_<FIPS>.afp.gz, USA_4_<FIPS>.afp.gz and entries merged into <outDir>/levels.json.
 import fs from 'fs';
@@ -9,7 +10,7 @@ import zlib from 'zlib';
 import { pathToFileURL } from 'url';
 import { readDBF, readSHP } from './lib-shp.mjs';
 
-const [earcutPath, TRACT_DIR, BG_DIR, PL_DIR, OUT, FPOP] = process.argv.slice(2);
+const [earcutPath, TRACT_DIR, BG_DIR, PL_DIR, OUT, FPOP, VTD_DIR, ELEC_DIR] = process.argv.slice(2);
 // fallback when census counts are unavailable: the 0.05° population raster from build-data.mjs
 const FW = 7200, FH = 3600, FRES = 0.05;
 const fPop = FPOP && fs.existsSync(FPOP) ? (() => { const b = fs.readFileSync(FPOP); return new Float32Array(b.buffer, b.byteOffset, FW * FH); })() : null;
@@ -50,7 +51,7 @@ function loadPL(file) {
   if (!fs.existsSync(file)) return null;
   let j; try { j = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
   if (!Array.isArray(j) || j.length < 2) return null;
-  const H = j[0], iS = H.indexOf('state'), iC = H.indexOf('county'), iT = H.indexOf('tract'), iB = H.indexOf('block group');
+  const H = j[0], iS = H.indexOf('state'), iC = H.indexOf('county'), iT = H.indexOf('tract') >= 0 ? H.indexOf('tract') : H.indexOf('voting district'), iB = H.indexOf('block group');
   const vi = PL_VARS.map((v) => H.indexOf(v)); const m = new Map();
   for (let r = 1; r < j.length; r++) { const R = j[r]; const g = R[iS] + R[iC] + R[iT] + (iB >= 0 ? R[iB] : ''); m.set(g, vi.map((i) => i >= 0 ? Math.max(0, +R[i] || 0) : 0)); }
   return m;
@@ -179,7 +180,7 @@ function writePack(file, G, H) {
     format: 'afp', v: 1, kind: 'admin', state: H.key, title: H.title, iso: 'USA', level: H.level, levelName: H.levelName, count: H.count,
     origin: [G.ox, G.oy], bbox: G.bbox, source: H.source,
     pop: f32(H.pop), vap: H.vap ? f32(H.vap) : null,
-    race: H.race.map(([label, a]) => ({ label, data: f32(a) })), vrace: H.vrace.map(([label, a]) => ({ label, data: f32(a) })), elections: [], plans: [],
+    race: H.race.map(([label, a]) => ({ label, data: f32(a) })), vrace: H.vrace.map(([label, a]) => ({ label, data: f32(a) })), elections: (H.elections || []).map((e) => ({ key: e.key, label: e.label, d: f32(e.d), r: f32(e.r) })), plans: [],
     county: blob(Uint16Array.from(H.county)), countyNames: H.countyNames, stateFips: H.fips,
     names: H.names, ids: H.ids,
     center: f32(G.centers), area: blob(H.area || G.areaKm), perim: f32(G.perim),
@@ -192,44 +193,81 @@ function writePack(file, G, H) {
   return fs.statSync(file).size;
 }
 
+// ---- county presidential results (votes are spread over a county's areas by voting-age population) ----
+function loadElections(dir) {
+  const out = [];
+  if (!dir || !fs.existsSync(dir)) return out;
+  for (const f of fs.readdirSync(dir).filter((x) => /^\d{4}.*\.csv$/i.test(x)).sort().reverse()) {
+    const lines = fs.readFileSync(path.join(dir, f), 'utf8').trim().split(/\r?\n/), H = lines[0].split(',').map((x) => x.replace(/"/g, '').trim().toLowerCase());
+    const iD = H.indexOf('votes_dem'), iR = H.indexOf('votes_gop'), iF = H.findIndex((x) => x === 'county_fips' || x === 'combined_fips' || x === 'fips');
+    if (iD < 0 || iR < 0 || iF < 0) continue;
+    const m = new Map();
+    for (const L of lines.slice(1)) { const c = L.split(','); const fp = String(c[iF]).replace(/"/g, '').replace(/\.0$/, '').padStart(5, '0'); const d = +c[iD], r = +c[iR]; if (isFinite(d) && isFinite(r)) m.set(fp, [d, r]); }
+    const yr = f.slice(0, 4); out.push({ key: 'PRES' + yr.slice(2), label: `President ${yr} (county result, estimated)`, m });
+  }
+  return out;
+}
+const ELECTIONS = loadElections(ELEC_DIR);
+log('elections', ELECTIONS.map((e) => `${e.label}: ${e.m.size} counties`).join('; ') || 'none');
+// field names differ between cartographic (STATEFP) and TIGER 2020 (STATEFP20) files
+const F = (row, k) => row[k] ?? row[k + '20'];
+
 const KINDS = [
-  { level: 3, dir: TRACT_DIR, pl: 'tract', levelName: 'Census tract', TOL: Q * 0.000004 },
-  { level: 4, dir: BG_DIR, pl: 'bg', levelName: 'Census block group', TOL: Q * 0.000003 },
+  { level: 3, dir: TRACT_DIR, pl: 'tract', levelName: 'Census tract', TOL: Q * 0.000004, name: (r) => String(F(r, 'NAMELSAD') || ('Tract ' + F(r, 'NAME'))) },
+  { level: 4, dir: BG_DIR, pl: 'bg', levelName: 'Census block group', TOL: Q * 0.000003, name: (r) => `Block Group ${F(r, 'BLKGRPCE') || String(F(r, 'GEOID')).slice(-1)}, Tract ${F(r, 'TRACTCE') ? (+F(r, 'TRACTCE') / 100).toString() : ''}` },
+  { level: 5, dir: VTD_DIR, pl: 'vtd', levelName: 'Voting district', TOL: Q * 0.000003, name: (r) => String(F(r, 'NAMELSAD') || F(r, 'NAME') || ('VTD ' + F(r, 'VTDST'))) },
 ];
 const manifest = [];
 for (const K of KINDS) {
-  if (!K.dir || !fs.existsSync(K.dir)) { log('skip level', K.level, '(no shapefiles)'); continue; }
-  const t0 = Date.now(); const all = loadDir(K.dir); log(K.levelName, all.length, 'shapes loaded', ((Date.now() - t0) / 1000).toFixed(1) + 's');
-  const byState = new Map(); for (const it of all) { const st = String(it.row.STATEFP || String(it.row.GEOID).slice(0, 2)).padStart(2, '0'); if (!STATES[st]) continue; if (!byState.has(st)) byState.set(st, []); byState.get(st).push(it); }
+  if (!K.dir || !fs.existsSync(K.dir) || !pickShp(K.dir).length) { log('skip level', K.level, '(no shapefiles)'); continue; }
   const parts = [];
-  for (const [fips, items] of [...byState.entries()].sort()) {
-    const t1 = Date.now();
-    items.sort((a, b) => String(a.row.GEOID).localeCompare(String(b.row.GEOID)));
-    if (items.length > 65000) { log('SKIP', fips, 'too many units'); continue; }
-    const pl = loadPL(path.join(PL_DIR, `${K.pl}_${fips}.json`));
-    const raw = items.map((it) => it.rings.map((r) => r.map(([x, y]) => [fips === '02' && x > 100 ? x - 360 : x, y])));
-    const G = buildGeometry(raw, K.TOL);
-    const counties = [...new Set(items.map((it) => String(it.row.COUNTYFP)))].sort();
-    const cname = new Map(); for (const it of items) if (!cname.has(String(it.row.COUNTYFP))) cname.set(String(it.row.COUNTYFP), String(it.row.NAMELSADCO || ('County ' + it.row.COUNTYFP)));
-    const v = (it, k) => { const r = pl && pl.get(String(it.row.GEOID)); return r ? r[k] : 0; };
-    const has = !!pl; const col = (k) => items.map((it) => v(it, k));
-    const pop = has ? col(0) : items.map((it) => Math.round(rasterPop(it.rings))), other = (i) => Math.max(0, v(items[i], 0) - v(items[i], 1) - v(items[i], 2) - v(items[i], 3) - v(items[i], 4) - v(items[i], 5));
-    const H = {
-      key: `USA_${K.level}_${fips}`, title: STATES[fips], level: K.level, levelName: K.levelName, count: items.length, fips,
-      source: 'US Census Bureau — 2020 cartographic boundaries' + (has ? ' and 2020 redistricting data (PL 94-171)' : '; population estimated'),
-      pop, vap: has ? col(6) : null,
-      race: has ? [['White', col(2)], ['Black', col(3)], ['Hispanic', col(1)], ['Asian', col(5)], ['Native', col(4)], ['Other', items.map((_, i) => other(i))]] : [],
-      vrace: has ? [['White', col(8)], ['Black', col(9)], ['Hispanic', col(7)], ['Asian', col(11)], ['Native', col(10)]] : [],
-      county: items.map((it) => counties.indexOf(String(it.row.COUNTYFP))), countyNames: counties.map((c) => cname.get(c)),
-      names: items.map((it) => K.level === 4 ? `Block Group ${it.row.BLKGRPCE || String(it.row.GEOID).slice(-1)}, Tract ${it.row.TRACTCE ? (+it.row.TRACTCE / 100).toString() : ''}` : String(it.row.NAMELSAD || ('Tract ' + it.row.NAME))),
-      ids: items.map((it) => String(it.row.GEOID)),
-      area: Float32Array.from(items, (it, u) => it.row.ALAND > 0 ? it.row.ALAND / 1e6 : G.areaKm[u]),
-    };
-    const file = `${H.key}.afp.gz`, bytes = writePack(path.join(OUT, file), G, H);
-    parts.push({ file, key: H.key, title: STATES[fips], count: items.length, bbox: G.bbox, bytes, verts: G.pos.length / 2, cov: G.cov, pop: Math.round(pop.reduce((s, x) => s + x, 0)) });
-    log(H.key, STATES[fips], items.length, 'units', (bytes / 1048576).toFixed(2), 'MB', has ? 'with PL data' : 'NO PL DATA', ((Date.now() - t1) / 1000).toFixed(1) + 's');
+  // one shapefile at a time (a national file holds every state; TIGER files are one per state)
+  for (const shp of pickShp(K.dir)) {
+    const t0 = Date.now(), base = shp.slice(0, -4), { rows } = readDBF(base + '.dbf'), shapes = readSHP(shp);
+    if (shapes.length !== rows.length) { log('SKIP', shp, 'shape/record mismatch'); continue; }
+    const byState = new Map();
+    rows.forEach((row, k) => { const st = String(F(row, 'STATEFP') || String(F(row, 'GEOID')).slice(0, 2)).padStart(2, '0'); if (!STATES[st] || !shapes[k].length) return; if (!byState.has(st)) byState.set(st, []); byState.get(st).push({ row, rings: shapes[k] }); });
+    log(K.levelName, path.basename(shp), rows.length, 'shapes', ((Date.now() - t0) / 1000).toFixed(1) + 's');
+    for (const [fips, items] of [...byState.entries()].sort()) {
+      const t1 = Date.now();
+      items.sort((a, b) => String(F(a.row, 'GEOID')).localeCompare(String(F(b.row, 'GEOID'))));
+      if (items.length > 65000) { log('SKIP', fips, 'too many units'); continue; }
+      const pl = loadPL(path.join(PL_DIR, `${K.pl}_${fips}.json`));
+      const raw = items.map((it) => it.rings.map((r) => r.map(([x, y]) => [fips === '02' && x > 100 ? x - 360 : x, y])));
+      const G = buildGeometry(raw, K.TOL);
+      const cf = (it) => String(F(it.row, 'COUNTYFP')).padStart(3, '0');
+      const counties = [...new Set(items.map(cf))].sort();
+      const cname = new Map(); for (const it of items) if (!cname.has(cf(it))) cname.set(cf(it), String(F(it.row, 'NAMELSADCO') || ('County ' + cf(it))));
+      const v = (it, k) => { const r = pl && pl.get(String(F(it.row, 'GEOID'))); return r ? r[k] : 0; };
+      const has = !!pl; const col = (k) => items.map((it) => v(it, k));
+      const pop = has ? col(0) : items.map((it) => Math.round(rasterPop(it.rings))), other = (i) => Math.max(0, v(items[i], 0) - v(items[i], 1) - v(items[i], 2) - v(items[i], 3) - v(items[i], 4) - v(items[i], 5));
+      const vap = has ? col(6) : null, weight = vap || pop;
+      // county votes -> areas, in proportion to voting-age population
+      const cTot = new Map(); items.forEach((it, u) => cTot.set(cf(it), (cTot.get(cf(it)) || 0) + weight[u]));
+      const elections = [];
+      for (const E of ELECTIONS) {
+        const d = new Float32Array(items.length), r = new Float32Array(items.length); let hit = 0;
+        items.forEach((it, u) => { const res = E.m.get(fips + cf(it)), t = cTot.get(cf(it)); if (!res || !t) return; d[u] = res[0] * weight[u] / t; r[u] = res[1] * weight[u] / t; hit++; });
+        if (hit > items.length * 0.8) elections.push({ key: E.key, label: E.label, d, r });
+      }
+      const H = {
+        key: `USA_${K.level}_${fips}`, title: STATES[fips], level: K.level, levelName: K.levelName, count: items.length, fips,
+        source: `US Census Bureau — 2020 ${K.level === 5 ? 'TIGER voting districts' : 'cartographic boundaries'}` + (has ? ' and 2020 redistricting data (PL 94-171)' : '; population estimated') + (elections.length ? '; votes: county presidential results spread by voting-age population' : ''),
+        pop, vap,
+        race: has ? [['White', col(2)], ['Black', col(3)], ['Hispanic', col(1)], ['Asian', col(5)], ['Native', col(4)], ['Other', items.map((_, i) => other(i))]] : [],
+        vrace: has ? [['White', col(8)], ['Black', col(9)], ['Hispanic', col(7)], ['Asian', col(11)], ['Native', col(10)]] : [],
+        elections,
+        county: items.map((it) => counties.indexOf(cf(it))), countyNames: counties.map((c) => cname.get(c)),
+        names: items.map((it) => K.name(it.row).slice(0, 60)),
+        ids: items.map((it) => String(F(it.row, 'GEOID'))),
+        area: Float32Array.from(items, (it, u) => F(it.row, 'ALAND') > 0 ? F(it.row, 'ALAND') / 1e6 : G.areaKm[u]),
+      };
+      const file = `${H.key}.afp.gz`, bytes = writePack(path.join(OUT, file), G, H);
+      parts.push({ file, key: H.key, title: STATES[fips], count: items.length, bbox: G.bbox, bytes, verts: G.pos.length / 2, cov: G.cov, pop: Math.round(pop.reduce((s2, x) => s2 + x, 0)), elections: elections.length });
+      log(H.key, STATES[fips], items.length, 'units', (bytes / 1048576).toFixed(2), 'MB', has ? 'with PL data' : 'NO PL DATA', elections.length + ' elections', ((Date.now() - t1) / 1000).toFixed(1) + 's');
+    }
   }
-  if (parts.length) manifest.push({ iso: 'USA', title: 'United States', level: K.level, levelName: K.levelName, count: parts.reduce((s, p) => s + p.count, 0), source: 'US Census Bureau 2020', byState: true, parts,
+  if (parts.length) manifest.push({ iso: 'USA', title: 'United States', level: K.level, levelName: K.levelName, count: parts.reduce((s2, p) => s2 + p.count, 0), source: 'US Census Bureau 2020', byState: true, parts: parts.sort((a, b) => a.key.localeCompare(b.key)),
     bbox: [Math.min(...parts.map((p) => p.bbox[0])), Math.min(...parts.map((p) => p.bbox[1])), Math.max(...parts.map((p) => p.bbox[2])), Math.max(...parts.map((p) => p.bbox[3]))] });
 }
 const mf = path.join(OUT, 'levels.json');
