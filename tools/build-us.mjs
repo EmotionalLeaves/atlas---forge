@@ -9,7 +9,25 @@ import zlib from 'zlib';
 import { pathToFileURL } from 'url';
 import { readDBF, readSHP } from './lib-shp.mjs';
 
-const [earcutPath, TRACT_DIR, BG_DIR, PL_DIR, OUT] = process.argv.slice(2);
+const [earcutPath, TRACT_DIR, BG_DIR, PL_DIR, OUT, FPOP] = process.argv.slice(2);
+// fallback when census counts are unavailable: the 0.05° population raster from build-data.mjs
+const FW = 7200, FH = 3600, FRES = 0.05;
+const fPop = FPOP && fs.existsSync(FPOP) ? (() => { const b = fs.readFileSync(FPOP); return new Float32Array(b.buffer, b.byteOffset, FW * FH); })() : null;
+function rasterPop(rings) {
+  if (!fPop) return 0;
+  let a = Infinity, b = -Infinity, c = Infinity, d = -Infinity;
+  for (const r of rings) for (const [x, y] of r) { if (x < a) a = x; if (x > b) b = x; if (y < c) c = y; if (y > d) d = y; }
+  if (!isFinite(a)) return 0;
+  const step = Math.max(0.0005, Math.max(b - a, d - c) / 14); let pop = 0;
+  for (let y = c + step / 2; y < d; y += step) for (let x = a + step / 2; x < b; x += step) {
+    let ins = false; for (const r of rings) { for (let i = 0, j = r.length - 1; i < r.length; j = i++) { const [xi, yi] = r[i], [xj, yj] = r[j]; if (((yi > y) !== (yj > y)) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) ins = !ins; } }
+    if (!ins) continue;
+    const row = Math.min(FH - 1, Math.floor((90 - y) / FRES)), col = Math.min(FW - 1, Math.floor((x + 180) / FRES));
+    const cellKm2 = (111.32 * FRES) ** 2 * Math.cos(y * Math.PI / 180), sKm2 = (111.32 * step) ** 2 * Math.cos(y * Math.PI / 180);
+    pop += fPop[row * FW + col] * sKm2 / cellKm2;
+  }
+  return pop;
+}
 const earcut = (await import(pathToFileURL(path.resolve(earcutPath)).href)).default;
 fs.mkdirSync(OUT, { recursive: true });
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
@@ -195,10 +213,10 @@ for (const K of KINDS) {
     const cname = new Map(); for (const it of items) if (!cname.has(String(it.row.COUNTYFP))) cname.set(String(it.row.COUNTYFP), String(it.row.NAMELSADCO || ('County ' + it.row.COUNTYFP)));
     const v = (it, k) => { const r = pl && pl.get(String(it.row.GEOID)); return r ? r[k] : 0; };
     const has = !!pl; const col = (k) => items.map((it) => v(it, k));
-    const pop = col(0), other = (i) => Math.max(0, v(items[i], 0) - v(items[i], 1) - v(items[i], 2) - v(items[i], 3) - v(items[i], 4) - v(items[i], 5));
+    const pop = has ? col(0) : items.map((it) => Math.round(rasterPop(it.rings))), other = (i) => Math.max(0, v(items[i], 0) - v(items[i], 1) - v(items[i], 2) - v(items[i], 3) - v(items[i], 4) - v(items[i], 5));
     const H = {
       key: `USA_${K.level}_${fips}`, title: STATES[fips], level: K.level, levelName: K.levelName, count: items.length, fips,
-      source: 'US Census Bureau — 2020 cartographic boundaries' + (has ? ' and 2020 redistricting data (PL 94-171)' : ''),
+      source: 'US Census Bureau — 2020 cartographic boundaries' + (has ? ' and 2020 redistricting data (PL 94-171)' : '; population estimated'),
       pop, vap: has ? col(6) : null,
       race: has ? [['White', col(2)], ['Black', col(3)], ['Hispanic', col(1)], ['Asian', col(5)], ['Native', col(4)], ['Other', items.map((_, i) => other(i))]] : [],
       vrace: has ? [['White', col(8)], ['Black', col(9)], ['Hispanic', col(7)], ['Asian', col(11)], ['Native', col(10)]] : [],

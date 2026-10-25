@@ -192,7 +192,17 @@ export function mapStyleSection() {
     h('div', { class: 'chips' }, Object.entries(BASEMAPS).map(([k, b]) => h('button', { class: 'chip-s' + (st.basemap === k ? ' on' : ''), onclick: () => { st.basemap = k; app.basemapOffline = false; saveSettings(); applyMapStyle(); refreshPanels(); } }, b.label))),
     online && !app.basemapOffline ? h('label', { class: 'slider' }, 'Overlay', h('input', { type: 'range', min: 0, max: 1, step: 0.02, value: st.opacity, oninput: (e) => { st.opacity = +e.target.value; out.textContent = Math.round(st.opacity * 100) + '%'; app.R.opts.opacity = st.opacity; app.R.dirty(); }, onchange: saveSettings }), out) : null,
     online && BASEMAPS[st.basemap].labels ? toggle('Place names on top', st.mapLabels, (v) => { st.mapLabels = v; saveSettings(); applyMapStyle(); }) : null,
-    app.basemapOffline && st.basemap !== 'none' ? h('div', { class: 'offline' }, 'Offline — showing the built-in map. ', h('button', { class: 'linkbtn', onclick: () => { app.basemapOffline = false; applyMapStyle(); refreshPanels(); } }, 'Try again')) : online ? h('div', { class: 'muted small' }, 'Online map — needs internet. Built-in works offline.') : null);
+    app.basemapOffline && st.basemap !== 'none' ? h('div', { class: 'offline' }, 'Offline — showing the built-in map. ', h('button', { class: 'linkbtn', onclick: () => { app.basemapOffline = false; applyMapStyle(); refreshPanels(); } }, 'Try again')) : online ? h('div', { class: 'muted small' }, 'Online map. Every area you look at is saved on your phone, so it still shows without internet.') : h('div', { class: 'muted small' }, 'Built-in map: works fully offline, with roads, railways, rivers and towns as you zoom in.'),
+    online ? tileCacheRow() : null);
+}
+let tileInfoMemo = null;
+function tileCacheRow() {
+  const B = window.AndroidBridge; if (!B || !B.tileCacheInfo) return null;
+  let info = tileInfoMemo && Date.now() - tileInfoMemo.t < 30000 ? tileInfoMemo.v : null;
+  if (!info) { try { info = JSON.parse(B.tileCacheInfo()); tileInfoMemo = { t: Date.now(), v: info }; } catch { return null; } }
+  const el = h('div', { class: 'kv small' }, h('span', null, `Saved for offline: ${info.files.toLocaleString()} map tiles · ${(info.bytes / 1048576).toFixed(0)} MB`),
+    h('button', { class: 'linkbtn', onclick: () => { B.clearTileCache(); tileInfoMemo = null; toast('Saved map tiles cleared'); refreshPanels(); } }, 'Clear'));
+  return el;
 }
 function welcomeCard() {
   let seen = false; try { seen = localStorage.getItem('af_welcome') === '1'; } catch {}
@@ -234,6 +244,7 @@ function renderExplore(b) {
   b.append(section('Show', h('div', { class: 'tog-row' },
     toggle('Real borders', app.show.borders, (v) => { app.show.borders = v; refresh(); }),
     toggle('Cities', app.show.cities, (v) => { app.show.cities = v; applyMapStyle(); }),
+    toggle('Roads & rivers', app.show.roads !== false, (v) => { app.show.roads = v; applyMapStyle(); }),
     toggle('Labels', app.show.labels, (v) => { app.show.labels = v; app.R.dirty(); }),
     toggle('Cell grid', app.show.grid, (v) => { app.show.grid = v; refresh(); }))));
   const W = app.W;

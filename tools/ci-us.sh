@@ -29,6 +29,8 @@ VARS="P1_001N,P2_002N,P2_005N,P2_006N,P2_007N,P2_008N,P3_001N,P4_002N,P4_005N,P4
 API=https://api.census.gov/data/2020/dec/pl
 KEYQ=""; [ -n "${CENSUS_API_KEY:-}" ] && KEYQ="&key=$CENSUS_API_KEY"
 okjson() { [ -s "$1" ] && head -c 3 "$1" | grep -q '^\[\["'; }
+# show what the API says once, so a failure is diagnosable from the log
+code=$(curl -sS -A "$UA" --max-time 60 -o "$US/probe.txt" -w '%{http_code}' "$API?get=P1_001N&for=state:01$KEYQ" 2>&1); echo "API probe: HTTP $code: $(head -c 300 "$US/probe.txt" 2>/dev/null)"
 for f in $FIPS; do
   t="$US/pl/tract_$f.json"; b="$US/pl/bg_$f.json"
   okjson "$t" || { get "$API?get=$VARS&for=tract:*&in=state:$f$KEYQ" "$t"; okjson "$t" || echo "FAIL pl tract $f"; }
@@ -43,7 +45,7 @@ done
 echo "pl files ok: $(for x in "$US"/pl/*.json; do okjson "$x" && echo .; done | wc -l)"
 
 echo "== tract and block group packs"
-node --max-old-space-size=12000 "$ROOT/tools/build-us.mjs" "$RAW/earcut/src/earcut.js" "$US/tract" "$US/bg" "$US/pl" "$OUT"
+node --max-old-space-size=12000 "$ROOT/tools/build-us.mjs" "$RAW/earcut/src/earcut.js" "$US/tract" "$US/bg" "$US/pl" "$OUT" "$RAW/fpop.bin"
 echo "levels now: $(ls "$OUT" | wc -l) files, $(du -sh "$OUT" | cut -f1)"
 # succeed only when both US levels made it in (so CI does not cache a partial build)
 node -e 'const m=require(process.argv[1]);const u=m.filter(x=>x.iso==="USA"&&x.byState);process.exit(u.length>=2&&u.every(x=>x.parts.filter(p=>p.pop>0).length>=50)?0:1)' "$OUT/levels.json"

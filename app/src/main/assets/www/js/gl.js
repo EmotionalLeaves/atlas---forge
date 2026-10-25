@@ -252,15 +252,6 @@ export class MapRenderer {
     const left = c.x - this.vw / 2 / c.s, right = c.x + this.vw / 2 / c.s;
     const offs = []; for (let k = Math.floor(left); k <= Math.floor(right) && offs.length < 4; k++) offs.push(k);
     let P;
-    // polygon layers drawn underneath the cell raster (e.g. province colours behind war-front cells)
-    for (const L of Object.values(this.polys)) {
-      if (!L.under || !L.visible) continue;
-      P = this.prog.poly; gl.useProgram(P.p);
-      this._attr(P, 'a_pos', L.pos, 2); this._attr(P, 'a_col', L.col, 4, gl.UNSIGNED_BYTE, true);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, L.idx); gl.uniform1f(P.u.u_alpha, L.alpha * this.opts.opacity);
-      for (const o of offs) { this._common(P, o); gl.drawElements(gl.TRIANGLES, L.n, gl.UNSIGNED_INT, 0); }
-      this._disableAttrs();
-    }
     // land mask into the stencil buffer (smooth real coastlines for the cell grid)
     const M = this.mask && this.opts.clip !== false ? this.mask : null;
     if (M) {
@@ -276,6 +267,17 @@ export class MapRenderer {
       gl.colorMask(true, true, true, true); gl.stencilFunc(gl.EQUAL, 1, 0xff); gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
       this._disableAttrs();
     }
+    // polygon layers drawn underneath the cell raster (e.g. province colours behind war-front cells)
+    for (const L of Object.values(this.polys)) {
+      if (!L.under || !L.visible) continue;
+      if (M) { if (L.clip) gl.enable(gl.STENCIL_TEST); else gl.disable(gl.STENCIL_TEST); }
+      P = this.prog.poly; gl.useProgram(P.p);
+      this._attr(P, 'a_pos', L.pos, 2); this._attr(P, 'a_col', L.col, 4, gl.UNSIGNED_BYTE, true);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, L.idx); gl.uniform1f(P.u.u_alpha, L.alpha * this.opts.opacity);
+      for (const o of offs) { this._common(P, o); gl.drawElements(gl.TRIANGLES, L.n, gl.UNSIGNED_INT, 0); }
+      this._disableAttrs();
+    }
+    if (M) gl.enable(gl.STENCIL_TEST);
     // raster
     P = this.prog.raster; gl.useProgram(P.p); this._disableAttrs();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.rasterBuf);
@@ -293,7 +295,9 @@ export class MapRenderer {
     if (M) gl.disable(gl.STENCIL_TEST);
     // polygons
     for (const L of (this.polyOrder || Object.keys(this.polys)).map((k) => this.polys[k])) {
+      if (M) gl.disable(gl.STENCIL_TEST);
       if (!L || !L.visible || L.under) continue;
+      if (M && L.clip) gl.enable(gl.STENCIL_TEST); // lakes stay water
       P = this.prog.poly; gl.useProgram(P.p);
       this._attr(P, 'a_pos', L.pos, 2); this._attr(P, 'a_col', L.col, 4, gl.UNSIGNED_BYTE, true);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, L.idx); gl.uniform1f(P.u.u_alpha, L.alpha * this.opts.opacity);
@@ -310,7 +314,9 @@ export class MapRenderer {
       }
       for (const o of offs) { this._common(P, o); gl.drawArrays(gl.LINES, 0, L.ln); }
       this._disableAttrs();
+      if (M) gl.disable(gl.STENCIL_TEST);
     }
+    if (M) gl.disable(gl.STENCIL_TEST);
     // lines
     P = this.prog.line; gl.useProgram(P.p);
     for (const L of Object.values(this.lines)) {

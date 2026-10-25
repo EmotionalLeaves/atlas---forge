@@ -6,6 +6,7 @@ import { tick, applyDisaster } from './sim.js';
 import { buildCatalog, colorize, unitAgg } from './themes.js';
 import { planStats, paintUnits, brushCells, floodUnits, eligible, districtVotes, parentUnits, unitLayer, planLayer, paintCoi, ensureCoi, COI_COLORS } from './plans.js';
 import { loadPack, getLoaded } from './precincts.js';
+import { scheduleRef, updateRef, REF } from './refmap.js';
 import { LV, LEVEL_THEMES, setLevel, scheduleLevelUpdate, colorLevels, pickLevel, levelLabels } from './levels.js';
 import { getSlot, putSlot, serialize, deserialize } from './store.js';
 import { TERRAIN_COLORS, clamp, h, hsl } from './util.js';
@@ -13,7 +14,7 @@ import * as UI from './panels.js';
 import { Basemap, BASEMAPS } from './basemap.js';
 
 export const app = {
-  mode: 'explore', themeId: 'nations', running: false, speed: 1, show: { borders: true, cities: true, labels: true, grid: true },
+  mode: 'explore', themeId: 'nations', running: false, speed: 1, show: { borders: true, cities: true, labels: true, grid: true, roads: true },
   tool: 'pan', district: 0, brush: 2, paintNation: 0, dataAttr: 'dev', dataValue: 0.5, disaster: 'quake', editTool: 'borders',
   sel: null, undo: [], redo: [], aggStamp: 0,
   settings: { basemap: 'streets', opacity: 0.72, mapLabels: true },
@@ -28,6 +29,7 @@ export function applyMapStyle() {
   app.R.opts.opacity = B.online ? st.opacity : 1;
   app.R.opts.grid = app.show.grid && !B.online;
   if (app.R.points) app.R.points.visible = app.show.cities && !B.hasLabels;
+  REF.on = app.show.roads !== false; updateRef(app);
   app.R.dirty();
 }
 window.app = app;
@@ -45,6 +47,7 @@ export async function boot() {
     app.R.addPolyLayer('provinces', D.geom.prov); app.R.addPolyLayer('counties', D.geom.county);
     app.R.addPolyLayer('nationProv', D.geom.prov, { share: 'provinces', lineColors: true });
     const under = app.R.addPolyLayer('nationUnder', D.geom.prov, { share: 'provinces' }); under.under = true;
+    for (const k of ['provinces', 'counties', 'nationProv', 'nationUnder']) app.R.polys[k].clip = true; // lakes cut out (provinces include the Great Lakes etc.)
     app.R.polyOrder = ['nationProv', 'provinces', 'counties', 'precincts'];
     D.packs = {};
     app.R.setLandMask('provinces', D.geom.lakes);
@@ -66,7 +69,7 @@ export async function boot() {
     app.basemap = new Basemap(document.getElementById('tilesBase'), document.getElementById('tilesLabels'), document.getElementById('attr'));
     app.basemap.onOffline = () => { app.basemapOffline = true; UI.refreshPanels(); app.basemap.setStyle('none'); app.R.opts.opacity = 1; app.R.opts.grid = app.show.grid; if (app.R.points) app.R.points.visible = app.show.cities; app.R.dirty(); };
     let lastCam = '';
-    app.R.onFrame = (R) => { app.basemap.update(R); const k = R.cam.x.toFixed(5) + R.cam.y.toFixed(5) + R.cam.s.toFixed(0); if (k !== lastCam) { lastCam = k; if (LV.level) scheduleLevelUpdate(app); } };
+    app.R.onFrame = (R) => { app.basemap.update(R); const k = R.cam.x.toFixed(5) + R.cam.y.toFixed(5) + R.cam.s.toFixed(0); if (k !== lastCam) { lastCam = k; if (LV.level) scheduleLevelUpdate(app); scheduleRef(app); } };
     applyMapStyle();
     window.addEventListener('resize', () => app.R.resize());
     // Android may drop the GPU context while the app is in the background: save, then reload from the autosave

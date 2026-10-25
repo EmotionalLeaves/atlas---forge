@@ -22,11 +22,23 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Hosts the Atlas Forge web app (assets/www) in a full-screen WebView. */
 public class MainActivity extends Activity {
@@ -34,10 +46,17 @@ public class MainActivity extends Activity {
     private static final int PICK_FILE = 41;
     private WebView web;
     private ValueCallback<Uri[]> fileCallback;
+    // map tiles the user has looked at are kept on the device so those areas still show offline
+    private static final Set<String> TILE_HOSTS = new HashSet<>(Arrays.asList(
+            "server.arcgisonline.com", "services.arcgisonline.com", "tile.openstreetmap.org", "tile.opentopomap.org"));
+    private static final long TILE_CACHE_MAX = 1500L * 1024 * 1024;
+    private File tileDir;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        tileDir = new File(getFilesDir(), "tiles");
+        new Thread(this::pruneTiles).start();
         web = new WebView(this);
         web.setBackgroundColor(0xFF0E131B);
         setContentView(web);
@@ -57,6 +76,7 @@ public class MainActivity extends Activity {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 Uri url = request.getUrl();
+                if (url.getHost() != null && TILE_HOSTS.contains(url.getHost()) && "GET".equals(request.getMethod())) return tile(url);
                 if (!HOST.equals(url.getHost())) return null;
                 String path = url.getPath();
                 if (path == null || path.equals("/") || path.isEmpty()) path = "/index.html";
@@ -108,6 +128,68 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Bridge(), "AndroidBridge");
         web.loadUrl("https://" + HOST + "/index.html");
     }
+
+    // ---- tile cache ----
+    private static String keyOf(String s) {
+        try {
+            byte[] d = MessageDigest.getInstance("SHA-1").digest(s.getBytes("UTF-8"));
+            StringBuilder b = new StringBuilder(); for (byte x : d) b.append(String.format("%02x", x)); return b.toString();
+        } catch (Exception e) { return Integer.toHexString(s.hashCode()); }
+    }
+    private static String imageMime(byte[] head) {
+        if (head.length > 3 && (head[0] & 0xff) == 0x89 && head[1] == 'P') return "image/png";
+        if (head.length > 2 && (head[0] & 0xff) == 0xff && (head[1] & 0xff) == 0xd8) return "image/jpeg";
+        if (head.length > 11 && head[8] == 'W' && head[9] == 'E') return "image/webp";
+        return "image/png";
+    }
+    private WebResourceResponse tile(Uri url) {
+        Map<String, String> h = new HashMap<>();
+        h.put("Access-Control-Allow-Origin", "*");
+        String key = keyOf(url.toString());
+        File f = new File(new File(tileDir, key.substring(0, 2)), key);
+        try {
+            if (f.length() > 0) {
+                byte[] head = new byte[12];
+                try (FileInputStream in = new FileInputStream(f)) { in.read(head); }
+                if (System.currentTimeMillis() - f.lastModified() > 86400000L) f.setLastModified(System.currentTimeMillis());
+                return new WebResourceResponse(imageMime(head), null, 200, "OK", h, new FileInputStream(f));
+            }
+            HttpURLConnection c = (HttpURLConnection) new URL(url.toString()).openConnection();
+            c.setConnectTimeout(8000); c.setReadTimeout(20000);
+            c.setRequestProperty("User-Agent", "AtlasForge/1.0 (Android map app; github.com/EmotionalLeaves/atlas---forge)");
+            int code = c.getResponseCode();
+            if (code != 200) { c.disconnect(); return new WebResourceResponse("text/plain", "utf-8", code, "Error", h, new ByteArrayInputStream(new byte[0])); }
+            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+            try (InputStream in = c.getInputStream()) { byte[] buf = new byte[16384]; int n; while ((n = in.read(buf)) > 0) { bo.write(buf, 0, n); if (bo.size() > 4 * 1024 * 1024) break; } }
+            c.disconnect();
+            byte[] data = bo.toByteArray();
+            try {
+                File dir = f.getParentFile(); if (dir != null && !dir.exists()) dir.mkdirs();
+                File tmp = new File(f.getPath() + ".tmp");
+                try (FileOutputStream out = new FileOutputStream(tmp)) { out.write(data); }
+                if (!tmp.renameTo(f)) tmp.delete();
+            } catch (IOException ignored) { }
+            return new WebResourceResponse(imageMime(data), null, 200, "OK", h, new ByteArrayInputStream(data));
+        } catch (Exception e) {
+            return new WebResourceResponse("text/plain", "utf-8", 504, "Offline", h, new ByteArrayInputStream(new byte[0]));
+        }
+    }
+    private long[] tileStats(List<File> collect) {
+        long n = 0, bytes = 0; File[] dirs = tileDir.listFiles();
+        if (dirs != null) for (File d : dirs) { File[] fs = d.listFiles(); if (fs == null) continue; for (File x : fs) { n++; bytes += x.length(); if (collect != null) collect.add(x); } }
+        return new long[] { n, bytes };
+    }
+    /** Keep the tile cache under its size limit (least recently used tiles go first). */
+    private void pruneTiles() {
+        try {
+            List<File> all = new ArrayList<>(); long[] st = tileStats(all);
+            if (st[1] <= TILE_CACHE_MAX) return;
+            all.sort((a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+            long bytes = st[1];
+            for (File x : all) { if (bytes <= TILE_CACHE_MAX * 8 / 10) break; bytes -= x.length(); x.delete(); }
+        } catch (Exception e) { Log.w("AtlasForge", "prune failed", e); }
+    }
+    private static void deleteTree(File f) { File[] k = f.listFiles(); if (k != null) for (File x : k) deleteTree(x); f.delete(); }
 
     private static String mimeOf(String path) {
         if (path.endsWith(".html")) return "text/html";
@@ -163,6 +245,15 @@ public class MainActivity extends Activity {
                 try { startActivity(Intent.createChooser(i, "Share plan")); } catch (ActivityNotFoundException ignored) { }
             });
         }
+
+        @JavascriptInterface
+        public String tileCacheInfo() {
+            long[] st = tileStats(null);
+            return "{\"files\":" + st[0] + ",\"bytes\":" + st[1] + ",\"max\":" + TILE_CACHE_MAX + "}";
+        }
+
+        @JavascriptInterface
+        public void clearTileCache() { deleteTree(tileDir); }
 
         @JavascriptInterface
         public String clipboardText() {
