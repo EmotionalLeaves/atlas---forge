@@ -369,3 +369,4 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .ucards button.on { border-color: var(--accent); background: rgba(217,164,65,.12); }
 .ucards button.on b { color: var(--accent2); }
 @media (min-width: 760px) { #hint { left: calc(50% + 230px); max-width: calc(100% - 600px); } }
+.linkbtn.back { font-size: 15px; text-decoration: none; margin: 8px 0 2px; display: inline-block; }
