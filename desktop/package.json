@@ -17,15 +17,39 @@
   "build": {
     "appId": "com.emotionalleaves.atlasforge",
     "productName": "Atlas Forge",
-    "directories": { "output": "dist" },
-    "files": ["main.js", "package.json", "icon.png"],
-    "extraResources": [{ "from": "www", "to": "www" }],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "package.json",
+      "icon.png"
+    ],
+    "extraResources": [
+      {
+        "from": "www",
+        "to": "www"
+      }
+    ],
     "asar": true,
     "compression": "normal",
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }, { "target": "zip", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "icon.png",
-      "artifactName": "AtlasForge-Setup-${version}.${ext}"
+      "artifactName": "AtlasForge-Windows-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -35,7 +59,6 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Atlas Forge",
       "artifactName": "AtlasForge-Setup-${version}.${ext}"
-    },
-    "zip": { "artifactName": "AtlasForge-Windows-${version}.${ext}" }
+    }
   }
 }
