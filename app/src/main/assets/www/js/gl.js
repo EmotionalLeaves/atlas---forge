@@ -148,6 +148,20 @@ export class MapRenderer {
     if (lineColors) { L.lcol = gl.createBuffer(); L.lcolData = new Uint8Array(geom.luid.length * 4); gl.bindBuffer(gl.ARRAY_BUFFER, L.lcol); gl.bufferData(gl.ARRAY_BUFFER, L.lcolData, gl.DYNAMIC_DRAW); }
     this.polys[name] = L; return L;
   }
+  // Shade everything outside some units of a polygon layer (ids: Set of unit indices); null clears.
+  setFocus(name, ids) {
+    const gl = this.gl;
+    if (this.focus && this.focus.ib) gl.deleteBuffer(this.focus.ib);
+    this.focus = null;
+    const L = name && this.polys[name];
+    if (L && ids && ids.size) {
+      const g = L.geom, I = g.idx, U = g.uid, keep = [];
+      for (let t = 0; t < I.length; t += 3) if (ids.has(U[I[t]])) keep.push(I[t], I[t + 1], I[t + 2]);
+      const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(keep), gl.STATIC_DRAW);
+      this.focus = { pos: L.pos, ib, n: keep.length };
+    }
+    this.dirty();
+  }
   removePolyLayer(name) {
     const L = this.polys[name]; if (!L) return; const gl = this.gl;
     for (const b of [L.pos, L.idx, L.lbuf, L.col, L.lcol]) if (b) gl.deleteBuffer(b);
@@ -351,6 +365,25 @@ export class MapRenderer {
       const cnt = this.pointCount ? Math.min(pt.n, this.pointCount(c.s / this.dpr)) : pt.n;
       for (const o of offs) { this._common(P, o); gl.drawArrays(gl.POINTS, 0, cnt); }
       this._disableAttrs();
+    }
+    // chosen place: mark it in the stencil, then shade everything else
+    const F = this.focus;
+    if (F && F.n) {
+      gl.enable(gl.STENCIL_TEST); gl.clearStencil(0); gl.clear(gl.STENCIL_BUFFER_BIT);
+      P = this.prog.poly; gl.useProgram(P.p); this._disableAttrs();
+      gl.colorMask(false, false, false, false); gl.stencilFunc(gl.ALWAYS, 2, 0xff); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+      gl.vertexAttrib4f(P.a.a_col, 0, 0, 0, 1); gl.uniform1f(P.u.u_alpha, 1);
+      this._attr(P, 'a_pos', F.pos, 2); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, F.ib);
+      for (const o of offs) { this._common(P, o); gl.drawElements(gl.TRIANGLES, F.n, gl.UNSIGNED_INT, 0); }
+      this._disableAttrs();
+      gl.colorMask(true, true, true, true); gl.stencilFunc(gl.NOTEQUAL, 2, 0xff); gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+      const l = left - 1, r = right + 1, quad = new Float32Array([l, -1, r, -1, l, 2, r, -1, r, 2, l, 2]);
+      if (!this._quad) this._quad = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._quad); gl.bufferData(gl.ARRAY_BUFFER, quad, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(P.a.a_pos); gl.vertexAttribPointer(P.a.a_pos, 2, gl.FLOAT, false, 0, 0);
+      gl.vertexAttrib4f(P.a.a_col, 0.05, 0.09, 0.125, 0.82); gl.uniform1f(P.u.u_alpha, 1);
+      this._common(P, 0); gl.drawArrays(gl.TRIANGLES, 0, 6);
+      this._disableAttrs(); gl.disable(gl.STENCIL_TEST);
     }
     // labels
     const ctx = this.ctx; ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, this.lc.width, this.lc.height);

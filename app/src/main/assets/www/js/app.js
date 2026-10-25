@@ -12,9 +12,10 @@ import { getSlot, putSlot, serialize, deserialize } from './store.js';
 import { TERRAIN_COLORS, clamp, h, hsl } from './util.js';
 import * as UI from './panels.js';
 import { Basemap, BASEMAPS } from './basemap.js';
+import { initPlaces, cellInFocus, pointInFocus, FOCUS } from './places.js';
 
 export const app = {
-  mode: 'explore', themeId: 'nations', running: false, speed: 1, show: { borders: true, cities: true, labels: true, grid: true, roads: true },
+  mode: 'explore', themeId: 'nations', running: false, speed: 1, show: { borders: true, cities: true, labels: true, grid: true, roads: false },
   tool: 'pan', district: 0, brush: 2, paintNation: 0, dataAttr: 'dev', dataValue: 0.5, disaster: 'quake', editTool: 'borders',
   sel: null, undo: [], redo: [], aggStamp: 0,
   settings: { basemap: 'streets', opacity: 0.72, mapLabels: true },
@@ -77,6 +78,7 @@ export async function boot() {
     glc.addEventListener('webglcontextlost', (e) => { e.preventDefault(); app.running = false; autosave(); });
     glc.addEventListener('webglcontextrestored', () => { Promise.resolve(autosave()).finally(() => location.reload()); });
     setupInput(document.getElementById('map'));
+    initPlaces(app, UI);
     UI.init(app);
     loading.classList.add('done'); setTimeout(() => loading.remove(), 500);
     if (app.resumed) UI.toast(`Resumed “${W.name}” — ${UI.dateLabel()}`);
@@ -126,6 +128,12 @@ export async function usePack(state, progress) {
   if (!P.countyLabels) { // FIPS codes -> county names from the bundled US county list
     const byFips = new Map(app.D.units.counties.map((c) => [String(c.fips).padStart(5, '0'), c.n]));
     P.countyLabels = P.countyNames.map((c) => { const t = String(c).trim(); const f = /^\d{1,3}$/.test(t) ? P.stateFips + t.padStart(3, '0') : /^\d{5}$/.test(t) ? t : null; return (f && byFips.get(f)) || t; });
+    // areas without a real name get their county's name rather than a bare number
+    for (let u = 0; u < P.count; u++) {
+      const nm = String(P.names[u] || '').trim(), cl = P.countyLabels[P.county[u]] || '';
+      if (!nm || /^\d+$/.test(nm) || /^(Precinct|Area) \d/.test(P.units[u].n)) P.units[u].n = cl ? `${cl} · ${P.kind === 'admin' ? (P.levelName || 'area') : 'precinct'} ${nm || P.ids[u] || u + 1}` : P.units[u].n;
+      else P.units[u].n = nm;
+    }
   }
   app.D.packs = { [state]: P }; // keep one in memory at a time
   app.activePack = state;
@@ -136,7 +144,7 @@ export async function usePack(state, progress) {
   { // boundaries of the parent areas (counties for precincts, the level above for local areas)
     const g = P.geom, out = [], none = g.noNb || 65535;
     for (let k = 0; k < g.luid.length; k += 2) { const u = g.luid[k], v = g.lnb[k]; if (v === none || u > v || P.county[u] === P.county[v]) continue; out.push(g.lpos[k * 2], g.lpos[k * 2 + 1], g.lpos[k * 2 + 2], g.lpos[k * 2 + 3]); }
-    app.R.setThickLines('packParents', new Float32Array(out), [0.04, 0.05, 0.08, 0.85], (sc) => sc < 3000 ? 1 : 1.8, 3); app.R.thick.packParents.visible = false;
+    app.R.setThickLines('packParents', new Float32Array(out), [0.04, 0.05, 0.08, 0.85], (sc) => sc < 3000 ? 1 : 1.8, 3); if (app.R.thick.packParents) app.R.thick.packParents.visible = false; // none when the areas have no parent level
   }
   rebuildCatalog();
   return P;
@@ -452,6 +460,7 @@ function drawLabels(ctx, R) {
   const boxes = [];
   const free = (x, y, w, hh) => { for (const b of boxes) if (x < b[0] + b[2] && x + w > b[0] && y < b[1] + b[3] && y + hh > b[1]) return false; boxes.push([x, y, w, hh]); return true; };
   const label = (text, x, y, size, color, weight = 600, stroke = 'rgba(8,10,16,.75)') => {
+    if (FOCUS.cur) { const [fx, fy] = R.screenToWorld(x, y); if (!pointInFocus(fx, fy)) return false; } // only name things inside the chosen place
     ctx.font = `${weight} ${size}px 'Barlow SC', system-ui, sans-serif`; const w = ctx.measureText(text).width;
     if (x + w / 2 < 0 || x - w / 2 > vw || y < -size || y > vh + size) return false;
     if (!free(x - w / 2 - 2, y - size / 2 - 1, w + 4, size + 2)) return false;
@@ -636,7 +645,7 @@ function strokeMove(px, py) {
   }
   const cells = new Set();
   for (const [x, y] of pts) { const i = cellAtScreen(x, y); if (i < 0) continue; for (const c of brushCells(W, i % W.Wd, (i / W.Wd) | 0, app.brush - 1)) cells.add(c); }
-  let list = [...cells].filter((i) => W.D.cells.country[i]);
+  let list = [...cells].filter((i) => W.D.cells.country[i] && (stroke.tgt === 'plan' || stroke.tgt === 'coi' || cellInFocus(i))); // God-mode painting stays inside the chosen place
   if (!list.length) return;
   if (stroke.tgt === 'coi') paintCoi(W, p, list, app.tool === 'erase' ? -1 : app.coi, stroke.changes);
   else if (stroke.tgt === 'plan') {

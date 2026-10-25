@@ -33,7 +33,15 @@ select { appearance: none; background-image: linear-gradient(45deg, transparent 
 #top > * { pointer-events: auto; }
 .round { width: 40px; height: 40px; border-radius: 50%; background: var(--panel); display: grid; place-items: center; flex: none; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
 .round svg, .fab svg, .ic svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.title { display: flex; flex-direction: column; line-height: 1.1; flex: none; text-shadow: 0 1px 4px #000; }
+.title { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; flex: 0 1 auto; min-width: 0; text-shadow: 0 1px 4px #000; text-align: left; padding: 4px 10px 4px 8px; border-radius: var(--r-m); background: rgba(19, 32, 43, .55); }
+.title b { display: flex; align-items: baseline; gap: 6px; max-width: 52vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.title b #placeName { overflow: hidden; text-overflow: ellipsis; }
+.title .caret { font-style: normal; font-size: 11px; color: var(--muted); }
+.title span:empty { display: none; }
+.places .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 2px 0 8px; font-size: 15px; }
+.places .crumbs button { color: var(--accent2); padding: 4px 2px; }
+.places .crumbs span { color: var(--muted); }
+.places .chev { color: var(--muted); font-size: 18px; }
 .title b { font-size: 17px; font-weight: 700; letter-spacing: .2px; }
 .title span { font-size: 13px; font-weight: 500; color: var(--accent2); font-variant-numeric: tabular-nums; }
 .themechip { margin-left: auto; min-width: 0; max-width: 58vw; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 20px; background: var(--panel); box-shadow: 0 2px 10px rgba(0,0,0,.35); }
@@ -53,7 +61,7 @@ select { appearance: none; background-image: linear-gradient(45deg, transparent 
 .grab i { width: 40px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.25); }
 #sheetBody { overflow-y: auto; padding: 0 12px 14px; -webkit-overflow-scrolling: touch; }
 
-#tabs { position: absolute; left: 0; right: 0; bottom: 0; height: var(--tabs); padding-bottom: env(safe-area-inset-bottom); background: #0a131a; border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(4, 1fr); }
+#tabs { position: absolute; left: 0; right: 0; bottom: 0; height: var(--tabs); padding-bottom: env(safe-area-inset-bottom); background: #0a131a; border-top: 1px solid var(--line); display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
 #tabs button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: var(--muted); font-size: 13px; font-weight: 500; position: relative; }
 #tabs button.on::before { content: ''; position: absolute; top: 0; left: 30%; right: 30%; height: 2px; border-radius: 0 0 2px 2px; background: var(--accent); }
 #tabs button.on { color: var(--accent); }
@@ -371,7 +379,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 @media (min-width: 760px) { #hint { left: calc(50% + 230px); max-width: calc(100% - 600px); } }
 .linkbtn.back { font-size: 15px; text-decoration: none; margin: 8px 0 2px; display: inline-block; }
 /* full screen: only the map, the tool bar and the hint */
-body.full #top, body.full #tabs, body.full #sheet, body.full #floating .fab:not(#fsBtn), body.full #attr { display: none; }
+body.full #tabs, body.full #sheet, body.full #floating .fab:not(#fsBtn), body.full #attr, body.full #top > :not(.title) { display: none; }
+body.full #top { background: none; right: 70px; }
 body.full #floating { top: calc(10px + env(safe-area-inset-top)); }
 body.full #hint { top: calc(12px + env(safe-area-inset-top)); max-width: calc(100% - 84px); left: calc(50% - 24px); }
 body.full #dock { bottom: calc(14px + env(safe-area-inset-bottom)) !important; }
@@ -390,3 +399,4 @@ body.full #dock { bottom: calc(14px + env(safe-area-inset-bottom)) !important; }
   .seal { width: 46px; height: 46px; } .seal::before { inset: 7px; } .seal b { font-size: 15px; } .seal small { font-size: 9px; }
   .undo2 button { width: 32px; } .stepper button { width: 30px; }
 }
+.places .titem > span:first-child { flex: 1; min-width: 0; }

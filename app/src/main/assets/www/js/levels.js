@@ -15,9 +15,6 @@ export const LEVEL_THEMES = [
   { id: 'lv_pop', label: 'Population (estimated)', kind: 'num', ramp: 'inferno', log: true, fmt: (v) => fmt(v) },
   { id: 'lv_dens', label: 'Population density (estimated)', kind: 'num', ramp: 'inferno', log: true, fmt: (v) => fmt(v) + '/km²' },
   { id: 'lv_area', label: 'Area', kind: 'num', ramp: 'viridis', log: true, fmt: (v) => fmt(v) + ' km²' },
-  { id: 'lv_nation', label: 'Nation in the simulation', kind: 'cat' },
-  { id: 'lv_dev', label: 'Development (simulation)', kind: 'num', ramp: 'greens', domain: [0, 1], fmt: (v) => v.toFixed(2) },
-  { id: 'lv_lean', label: 'Political lean (simulation)', kind: 'num', ramp: 'diverge', domain: [-0.8, 0.8], fmt: (v) => v.toFixed(2) },
   // real data where a pack has it (US census tracts / block groups / precincts)
   { id: 'lv_vote', label: 'Real election result', kind: 'num', ramp: 'partisan', domain: [0.2, 0.8], fmt: (v) => v >= 0.5 ? 'D +' + Math.round((v * 2 - 1) * 100) : 'R +' + Math.round((1 - v * 2) * 100), needs: 'votes' },
   { id: 'lv_r_White', label: 'Share White (census)', kind: 'num', ramp: 'blues', domain: [0, 1], fmt: pct, needs: 'race' },

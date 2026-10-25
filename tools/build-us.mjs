@@ -216,7 +216,9 @@ const F = (row, k) => row[k] ?? row[k + '20'];
 const KINDS = [
   { level: 3, dir: TRACT_DIR, pl: 'tract', levelName: 'Census tract', TOL: Q * 0.000004, name: (r) => String(F(r, 'NAMELSAD') || ('Tract ' + F(r, 'NAME'))) },
   { level: 4, dir: BG_DIR, pl: 'bg', levelName: 'Census block group', TOL: Q * 0.000003, name: (r) => `Block Group ${F(r, 'BLKGRPCE') || String(F(r, 'GEOID')).slice(-1)}, Tract ${F(r, 'TRACTCE') ? (+F(r, 'TRACTCE') / 100).toString() : ''}` },
-  { level: 5, dir: VTD_DIR, pl: 'vtd', levelName: 'Voting district', TOL: Q * 0.000003, name: (r) => String(F(r, 'NAMELSAD') || F(r, 'NAME') || ('VTD ' + F(r, 'VTDST'))) },
+  { level: 5, dir: VTD_DIR, pl: 'vtd', levelName: 'Voting district', TOL: Q * 0.000003, name: (r) => { // the local name ("Lincoln Township", "Ward 3") rather than "… Voting District"
+    const n = String(F(r, 'NAME') || F(r, 'NAMELSAD') || ('Voting district ' + F(r, 'VTDST'))).trim();
+    return n === n.toUpperCase() ? n.toLowerCase().replace(/\b([a-z])/g, (m) => m.toUpperCase()) : n; } },
 ];
 const manifest = [];
 for (const K of KINDS) {

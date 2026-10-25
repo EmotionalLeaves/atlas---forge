@@ -34,6 +34,8 @@ export function eligible(W, p, u) {
   const D = W.D;
   if (p.unit === 'cells') return D.cells.country[u] !== 0 && W.owner[u] !== 0 && (!p.scope || D.cells.country[u] === p.scope);
   if (p.unit === 'provinces') return !p.scope || D.units.provinces[u].c === p.scope;
+  if (p.unit === 'counties') return !p.onlyState || D.units.counties[u].s === p.onlyState;
+  if (p.onlyCounty != null) { const P = D.packs && D.packs[p.pack]; return !P || P.county[u] === p.onlyCounty; }
   return true;
 }
 // Real precinct results for the plan's chosen election: [dem, other, rep] per precinct (null if not a precinct plan)
