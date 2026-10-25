@@ -714,6 +714,18 @@ function strokeEnd() {
   if (s.tgt === 'data') { computeAggregates(W); app.aggStamp++; }
   if (s.tgt !== 'plan') refresh();
   UI.refreshPanels();
+  firstTip(s.tgt);
+}
+// The first paint stroke of each kind explains itself once (no permanent hint on screen).
+function firstTip(tgt) {
+  const TIPS = {
+    borders: () => { const n = app.W.nations[app.paintNation]; return `Painted land for ${n && n.alive ? n.name : 'nobody'}. Undo is just above the tool bar; Move or two fingers moves the map.`; },
+    data: () => 'Painted new values. Undo is just above the tool bar; Move or two fingers moves the map.',
+    plan: () => `Painted into district ${app.district + 1}. Tap the circle at the right of the bar to switch district.`,
+  };
+  if (!TIPS[tgt]) return;
+  try { const k = 'af_tip_' + tgt; if (localStorage.getItem(k)) return; localStorage.setItem(k, '1'); } catch { return; }
+  UI.toast(TIPS[tgt](), 6000);
 }
 function undoArray(entry) {
   const W = app.W;

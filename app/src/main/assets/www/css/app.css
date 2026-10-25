@@ -462,3 +462,5 @@ button { touch-action: manipulation; }
 .swatches button.on { border-color: #fff; box-shadow: 0 0 0 2px var(--panel2), 0 0 0 4px rgba(255,255,255,.5); }
 .swatches input[type=color] { width: 44px; height: 36px; }
 .pickbtn { margin: 0 0 10px; }
+body[data-mode=draw] #themeBtn { visibility: hidden; }
+[hidden] { display: none !important; }

@@ -78,7 +78,12 @@ export function init() {
   }, true);
   const tabs = $('#tabs');
   for (const [m, label, ic] of [['explore', 'Map', 'explore'], ['draw', 'Districts', 'draw'], ['edit', 'Edit', 'edit']] /* History (world simulation) is switched off for now */) {
-    tabs.append(h('button', { 'data-mode': m, onclick: () => setMode(m) }, icon(ic), h('span', null, label)));
+    tabs.append(h('button', { 'data-mode': m, onclick: () => {
+      // with the panel hidden, open it when the new tab has nothing to show without it (the Map tab, or Districts before a plan exists)
+      app._centerCell = { i: cellAtScreen(...app.R.visibleCenter), t: Date.now() }; // what you were looking at, before the panel moves the view
+      if (app.full && m !== app.mode && (m === 'explore' || (m === 'draw' && !plan()))) setFull(false);
+      setMode(m);
+    } }, icon(ic), h('span', null, label)));
   }
   $('#menuBtn').innerHTML = ICON.menu; $('#menuBtn').onclick = openMenu;
   $('#placeBtn').onclick = openPlacePicker;
@@ -799,7 +804,7 @@ function renderPopTab(b, p, st) {
     list.append(h('button', { class: 'popbar' + (d.k === app.district ? ' on' : ''), onclick: () => { app.district = d.k; app.drawTab = 'paint'; if (app.tool === 'pan') app.tool = 'brush'; refreshPanels(); } },
       h('span', { class: 'num', style: { background: hex(p.colors[d.k]) } }, d.k + 1),
       h('span', { class: 'track' }, h('i', { style: { width: (d.pop / maxPop * 100) + '%', background: hex(p.colors[d.k]) } }), h('em', { style: { left: (st.ideal / maxPop * 100) + '%' } })),
-      h('small', { class: ok ? '' : 'bad' }, d.units ? `${fmt(d.pop)} · ${(d.dev >= 0 ? '+' : '') + (d.dev * 100).toFixed(1)}%` : 'empty'),
+      h('small', { class: ok || !d.units ? '' : 'bad' }, d.units ? `${fmt(d.pop)} · ${(d.dev >= 0 ? '+' : '') + (d.dev * 100).toFixed(1)}%` : 'empty'),
       h('span', { class: 'lock', onclick: (e) => { e.stopPropagation(); p.locked[d.k] = !p.locked[d.k]; refreshPanels(); } }, p.locked[d.k] ? '🔒' : '🔓')));
   }
   b.append(list, h('p', { class: 'muted small' }, 'The white tick is the ideal population. Tap a district to paint it; tap the lock to protect it from painting.'));
@@ -939,7 +944,16 @@ function newPlanForm(inModal) {
   const W = app.W, U = W.D.units;
   const st = { name: 'Plan ' + (W.plans.length + 1), unit: 'precincts', scope: U.countries.findIndex((c) => c.a3 === 'USA') + 1, n: 10, random: false, pack: app.precinctPreset || 'PA', real: -1 }; app.precinctPreset = null;
   // start from the chosen place (header button): its state, county or country
-  const F = FOCUS.cur;
+  // no chosen place? use whatever is in the middle of the map, once zoomed in to a country
+  let F = FOCUS.cur;
+  if (!F && app.R.cam.s / app.R.dpr > 1200) {
+    const cc = app._centerCell, i = cc && Date.now() - cc.t < 3000 ? cc.i : cellAtScreen(...app.R.visibleCenter), C = W.D.cells;
+    if (i >= 0 && C.country[i]) {
+      const c = U.countries[C.country[i] - 1], cty = C.county[i] ? U.counties[C.county[i] - 1] : null;
+      if (c && c.a3 === 'USA' && cty) F = { kind: 'province', a3: 'USA', name: cty.s };
+      else if (c && c.a3 !== 'USA') F = { kind: 'country', a3: c.a3, name: c.name };
+    }
+  }
   if (F && F.a3 === 'USA' && (F.kind === 'province' || F.kind === 'county')) {
     const sName = F.kind === 'county' ? F.state : F.name, s = US_STATES.find((x) => x[2] === sName);
     if (s) st.pack = s[1];
@@ -948,7 +962,7 @@ function newPlanForm(inModal) {
     st.unit = 'admin'; app.admPreset = F.a3; app.admPresetLevel = 2;
   }
   // district count follows the real world unless the user types one
-  const focusState = F && F.a3 === 'USA' && F.kind === 'province' ? US_STATES.find((x) => x[2] === F.name) : null;
+  const FC = FOCUS.cur, focusState = FC && FC.a3 === 'USA' && FC.kind === 'province' ? US_STATES.find((x) => x[2] === FC.name) : null; // only a chosen place limits a counties plan
   const realN = () => st.onlyCounty ? COUNTY_SEATS : st.unit === 'counties' ? (focusState ? focusState[3] : 435) : st.unit === 'admin' && st.adm ? (seatsFor(String(st.adm).slice(2, 5)) || st.n) : (st.unit === 'cells' || st.unit === 'provinces') && st.scope ? (seatsFor(U.countries[st.scope - 1].a3) || st.n) : st.n;
   const setRealN = () => {
     if (st.customN) return; let n = realN();
@@ -964,7 +978,9 @@ function newPlanForm(inModal) {
   const stateSel = h('select', { onchange: () => fillUnits() }), unitSel = h('select', { onchange: () => { st.pack = unitSel.value; showPack(); } });
   const packInfo = h('div', { class: 'muted small' });
   const realSel = h('select', { onchange: (e) => { st.real = +e.target.value; } }), realRow = h('label', null, 'Start from', realSel);
-  const nInput = h('input', { type: 'number', min: 2, max: 650, value: st.n, oninput: (e) => { st.n = clamp(+e.target.value || 2, 2, 650); st.customN = true; } });
+  const nInput = h('input', { type: 'number', min: 2, max: 650, value: st.n, oninput: (e) => { st.n = clamp(+e.target.value || 2, 2, 650); st.customN = true; realLink.hidden = false; } });
+  // typed your own number? one tap goes back to the real-world count
+  const realLink = h('button', { class: 'linkbtn', hidden: true, onclick: (e) => { e.preventDefault(); st.customN = false; realLink.hidden = true; if (st.unit === 'precincts') fillUnits(); else if (st.unit === 'admin') admInfo(); else setRealN(); } }, 'Use the real-world number');
   let packs = [], usLv = [];
   const preset = US_STATES.find((x) => x[1] === st.pack) || US_STATES.find((x) => x[1] === 'PA');
   stateSel.append(...US_STATES.map(([f, ab, name]) => h('option', { value: f, selected: f === preset[0] }, name)));
@@ -1025,9 +1041,8 @@ function newPlanForm(inModal) {
     unitCards(st, () => unitSelect), h('label', { class: 'hide-sel' }, 'Build districts from', unitSelect = (() => { const sel = h('select', { onchange: (e) => { st.unit = e.target.value; pctRows.style.display = st.unit === 'precincts' ? '' : 'none'; admRows.style.display = st.unit === 'admin' ? '' : 'none'; if (st.unit === 'admin') admInfo(); else if (!st.custom) { const pk = packs && packs.find((x) => x.state === st.pack); st.name = st.unit === 'precincts' ? `${pk ? pk.title : 'Precinct'} plan` : ({ counties: 'US counties plan', provinces: 'Provinces plan', cells: 'World grid plan' })[st.unit] || st.name; nameIn.value = st.name; } worldRows.style.display = ['precincts', 'counties', 'admin'].includes(st.unit) ? 'none' : ''; if (st.unit !== 'precincts') setRealN(); } }, [['precincts', UNIT_TYPES.precincts], ['admin', 'Real local areas — any country, levels 1–5'], ['cells', UNIT_TYPES.cells], ['provinces', UNIT_TYPES.provinces], ['counties', UNIT_TYPES.counties]].map(([k, l]) => h('option', { value: k, selected: k === st.unit }, l)));
       if (app.admPreset) setTimeout(() => { sel.value = 'admin'; sel.dispatchEvent(new Event('change')); }, 0); return sel; })()),
     pctRows, admRows, worldRows,
-    h('label', null, 'Name', nameIn),
-    h('label', null, 'Number of districts', nInput), seatNote,
-    randRow, status,
+    h('label', null, 'Number of districts', nInput), realLink, seatNote, status,
+    h('details', { class: 'sec' }, h('summary', null, 'More options'), h('label', null, 'Name', nameIn), randRow),
     h('details', { class: 'sec' }, h('summary', null, 'Have a plan code?'), (() => {
       const ta = h('textarea', { rows: 3, placeholder: 'Paste a code that starts with AF1:' });
       return h('div', null, ta, h('div', { class: 'btns' },
@@ -1079,7 +1094,7 @@ const UNIT_INFO = [
   ['admin', 'Local areas anywhere', 'Any country’s regions, districts, towns or villages'],
   ['counties', 'US counties', 'All 3,221 counties with census population'],
   ['provinces', 'Provinces and states', 'For any country or the whole world'],
-  ['cells', 'World grid', 'Free-form squares; these plans decide the simulation’s elections'],
+  ['cells', 'World grid', 'Free-form squares anywhere on Earth'],
 ];
 function unitCards(st, getSel) {
   const wrap = h('div', { class: 'ucards', role: 'radiogroup', 'aria-label': 'Build districts from' });
