@@ -278,3 +278,5 @@ td.maj { color: var(--accent2); font-weight: 700; }
 .coih { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .coih input { flex: 1; padding: 6px 8px; }
 .coi textarea { font-size: 13px; padding: 6px 8px; margin-bottom: 6px; }
+.seg.levels button { display: flex; flex-direction: column; align-items: center; padding: 6px 2px; min-width: 52px; }
+.seg.levels button b { font-size: 15px; } .seg.levels button small { font-size: 10px; font-weight: 500; }

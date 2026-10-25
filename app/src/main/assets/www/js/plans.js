@@ -337,6 +337,8 @@ export function parentUnits(W, p, u, provCells) {
 }
 export const PARENT_NAME = { cells: 'province', counties: 'state', provinces: 'country', precincts: 'county' };
 export const PARENT_PLURAL = { cells: 'provinces', counties: 'states', provinces: 'countries', precincts: 'counties' };
+// name for the parent areas of a plan's units ('counties' for precincts, the level above for admin areas)
+export function parentWord(W, p, plural = true) { const P = p.unit === 'precincts' && W.D.packs && W.D.packs[p.pack]; if (P && P.kind === 'admin') return plural ? 'parent areas' : 'parent area'; return plural ? PARENT_PLURAL[p.unit] : PARENT_NAME[p.unit]; }
 // the most recent presidential race if there is one
 export function defaultElection(P) { const k = P.elections.findIndex((e) => /^President/.test(e.label)); return k >= 0 ? k : 0; }
 

@@ -35,6 +35,11 @@ android {
         }
     }
 
+    // map packs are already gzip'd; storing them uncompressed lets the app stream them straight from the APK
+    androidResources {
+        noCompress 'gz'
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17

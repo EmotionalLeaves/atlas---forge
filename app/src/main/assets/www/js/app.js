@@ -99,7 +99,7 @@ export function autosave() { try { app.lastAutosave = Date.now(); return putSlot
 
 // ---------------------------------------------------------------- themes & colours
 export const theme = () => {
-  if (LV.level) { const t = LEVEL_THEMES.find((x) => x.id === app.themeId) || LEVEL_THEMES[0]; return { ...t, layer: 'level', group: 'Map level', value: () => NaN, catColor: () => [0, 0, 0], catLabel: () => '' }; }
+  if (LV.level && app.mode !== 'draw') { const t = LEVEL_THEMES.find((x) => x.id === app.themeId) || LEVEL_THEMES[0]; return { ...t, layer: 'level', group: 'Map level', value: () => NaN, catColor: () => [0, 0, 0], catLabel: () => '' }; }
   return app.catalog.find((t) => t.id === app.themeId) || app.catalog[0];
 };
 export async function chooseLevel(level) {
@@ -130,6 +130,11 @@ export async function usePack(state, progress) {
   app.R.addPolyLayer('precincts', P.geom);
   app.unitRGBA.precincts = new Uint8Array(P.count * 4);
   app.hitReset && app.hitReset('precincts'); delete ucCache.precincts; app._uc_precincts = null;
+  { // boundaries of the parent areas (counties for precincts, the level above for local areas)
+    const g = P.geom, out = [], none = g.noNb || 65535;
+    for (let k = 0; k < g.luid.length; k += 2) { const u = g.luid[k], v = g.lnb[k]; if (v === none || u > v || P.county[u] === P.county[v]) continue; out.push(g.lpos[k * 2], g.lpos[k * 2 + 1], g.lpos[k * 2 + 2], g.lpos[k * 2 + 3]); }
+    app.R.setThickLines('packParents', new Float32Array(out), [0.04, 0.05, 0.08, 0.85], (sc) => sc < 3000 ? 1 : 1.8, 3); app.R.thick.packParents.visible = false;
+  }
   rebuildCatalog();
   return P;
 }
@@ -142,6 +147,7 @@ export async function ensurePlanPack() {
 }
 function polyLayerShown() {
   const t = theme(), p = plan();
+  if (t.layer === 'level') return null;
   if (app.mode === 'draw' && p && p.unit !== 'cells') return p.unit === 'precincts' && !(app.activePack === p.pack && app.D.packs[p.pack]) ? null : p.unit;
   if (t.layer === 'precincts' && !app.activePack) return null;
   return t.layer !== 'cells' ? t.layer : null;
@@ -189,6 +195,7 @@ function refreshInner() {
   applySmooth();
   // ---- polygon layers
   for (const L of ['provinces', 'counties', 'precincts']) if (app.R.polys[L]) app.R.polys[L].visible = poly === L;
+  for (const k in app.R.polys) if (k.startsWith('lv:')) app.R.polys[k].visible = false; // map-level areas belong to Explore
   if (poly) {
     const units = layerFor(poly).units, arr = app.unitRGBA[poly];
     const tt = t.layer === poly ? t : app.catalog.find((x) => x.layer === poly);
@@ -203,7 +210,8 @@ function refreshInner() {
   if (app.R.points) app.R.points.visible = app.show.cities && app.mode !== 'draw' && !(app.basemap && app.basemap.hasLabels);
   app.R.thick.realBorders.visible = (app.show.borders && app.smooth !== 'owner') || (!!p && p.unit === 'provinces' && app.drawOpts.boundaries);
   app.R.lines.provLines.visible = !!p && (p.unit === 'cells' || p.unit === 'counties') && app.drawOpts.boundaries;
-  app.R.lines.countyLines.visible = (!!p && p.unit === 'precincts' && app.drawOpts.boundaries) || (poly === 'precincts' && !p);
+  app.R.lines.countyLines.visible = false;
+  if (app.R.thick.packParents) app.R.thick.packParents.visible = (!!p && p.unit === 'precincts' && app.drawOpts.boundaries) || (poly === 'precincts' && !p);
   if (!poly) districtOutlines(null);
   app.R.setCellColors(out); app.R.setCellGroups(grp);
   updateHighlight();
@@ -221,7 +229,7 @@ function refreshLevelView() {
   app.R.opts.grid = false;
   if (app.R.thick.realBorders) app.R.thick.realBorders.visible = app.show.borders;
   app.R.setCellColors(app.cellRGBA); app.R.setCellGroups(app.groupRGBA);
-  colorLevels(app); updateHighlight(); app.R.dirty();
+  colorLevels(app); scheduleLevelUpdate(app); updateHighlight(); app.R.dirty();
 }
 // Combine base colours with the active plan / selection into the textures.
 function composeCells(list) {

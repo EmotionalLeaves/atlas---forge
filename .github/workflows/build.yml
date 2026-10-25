@@ -19,6 +19,52 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # ---- map data: every admin level worldwide + US tracts/block groups (built here, cached) ----
+      - name: Restore map data
+        id: lvcache
+        uses: actions/cache/restore@v4
+        with:
+          path: app/src/main/assets/www/levels
+          key: levels-v1-${{ hashFiles('tools/build-levels.mjs', 'tools/build-data.mjs', 'tools/build-us.mjs', 'tools/lib-shp.mjs', 'tools/gb-list.txt', 'tools/gb-meta.json', 'tools/ci-levels.sh', 'tools/ci-us.sh') }}
+
+      - name: Restore raw downloads
+        if: steps.lvcache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/afraw
+          key: raw-v1-${{ hashFiles('tools/gb-list.txt') }}-${{ github.run_number }}
+          restore-keys: raw-v1-
+
+      - name: Build admin levels
+        if: steps.lvcache.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          bash tools/ci-levels.sh 2>&1 | tee data.log
+
+      - name: Build US tracts and block groups
+        id: us
+        if: steps.lvcache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bash tools/ci-us.sh 2>&1 | tee -a data.log
+
+      - name: Save map data
+        if: steps.lvcache.outputs.cache-hit != 'true' && steps.us.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: app/src/main/assets/www/levels
+          key: ${{ steps.lvcache.outputs.cache-primary-key }}
+
+      - name: Map data summary
+        run: |
+          echo "levels: $(ls app/src/main/assets/www/levels | wc -l) files, $(du -sh app/src/main/assets/www/levels | cut -f1)" | tee -a data.log
+          df -h . | tee -a data.log
+
       - name: Build release APK
         run: |
           chmod +x gradlew
@@ -48,6 +94,7 @@ jobs:
         if: always()
         run: |
           mkdir -p /tmp/ci && (cp build.log /tmp/ci/build.log 2>/dev/null || echo "no build log" > /tmp/ci/build.log)
+          cp data.log /tmp/ci/data.log 2>/dev/null || echo "map data came from cache" > /tmp/ci/data.log
           echo "${{ job.status }} run=${{ github.run_number }} sha=${{ github.sha }}" > /tmp/ci/status.txt
           tail -n 120 /tmp/ci/build.log > /tmp/ci/tail.txt
           cd /tmp/ci && git init -q && git checkout -q -b ci-log

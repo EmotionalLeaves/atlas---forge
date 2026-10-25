@@ -1,5 +1,5 @@
 // Builds admin-level packs (ADM1–ADM5 for every country with open data) from geoBoundaries TopoJSON.
-// Usage: node --max-old-space-size=12000 tools/build-levels.mjs <earcut.js> <topoDir> <metaDir> <fpop.bin> <outDir> [ISO filter]
+// Usage: node --max-old-space-size=12000 tools/build-levels.mjs <earcut.js> <topoDir> <metaDir|gb-meta.json> <fpop.bin> <outDir> [ISO filter]
 // Output: <outDir>/<ISO>_<L>[_<part>].afp.gz (same container as precinct packs) + <outDir>/levels.json manifest.
 import fs from 'fs';
 import path from 'path';
@@ -150,7 +150,13 @@ function writePack(file, meta, units) {
   const hj = Buffer.from(JSON.stringify(header)); const pre = Buffer.alloc(8); pre.write('AFP1', 0); pre.writeUInt32LE(hj.length, 4);
   const pad = Buffer.alloc((8 - ((8 + hj.length) % 8)) % 8);
   fs.writeFileSync(file, zlib.gzipSync(Buffer.concat([pre, hj, pad, ...blobs]), { level: 9 }));
-  return { bbox: header.bbox, verts: pos.length / 2 };
+  // 10° coverage grid (36×18 bits) so viewers can tell which parts of the world a pack really touches
+  const cov = new Uint8Array(81);
+  for (const U of units) for (const pl of U.mpolys) for (const r of pl) {
+    let a = Infinity, b = -Infinity, c = Infinity, d = -Infinity; for (const p of r) { a = Math.min(a, p[0]); b = Math.max(b, p[0]); c = Math.min(c, p[1]); d = Math.max(d, p[1]); }
+    for (let gx = Math.max(0, Math.floor((a + 180) / 10)); gx <= Math.min(35, Math.floor((b + 180) / 10)); gx++) for (let gy = Math.max(0, Math.floor((90 - d) / 10)); gy <= Math.min(17, Math.floor((90 - c) / 10)); gy++) { const k = gy * 36 + gx; cov[k >> 3] |= 1 << (k & 7); }
+  }
+  return { bbox: header.bbox, verts: pos.length / 2, cov: Buffer.from(cov).toString('hex') };
 }
 
 // ---- main ----
@@ -158,7 +164,9 @@ const files = fs.readdirSync(TOPO).filter((f) => /_ADM[1-5]_/.test(f));
 const byIso = new Map();
 for (const f of files) { const m = f.match(/^([A-Z]{3})_ADM(\d)_/); if (!m) continue; if (ONLY && !ONLY.split(',').includes(m[1])) continue; if (!byIso.has(m[1])) byIso.set(m[1], []); byIso.get(m[1]).push([+m[2], f]); }
 const manifest = [];
-const metaOf = (iso, L) => { try { return JSON.parse(fs.readFileSync(path.join(META, `${iso}_ADM${L}_geoBoundaries-${iso}-ADM${L}-metaData.json`), 'utf8')); } catch { return {}; } };
+// META is either the folder of geoBoundaries metadata files or the condensed tools/gb-meta.json
+const metaJson = META.endsWith('.json') ? JSON.parse(fs.readFileSync(META, 'utf8')) : null;
+const metaOf = (iso, L) => { if (metaJson) return metaJson[`${iso}_${L}`] || {}; try { return JSON.parse(fs.readFileSync(path.join(META, `${iso}_ADM${L}_geoBoundaries-${iso}-ADM${L}-metaData.json`), 'utf8')); } catch { return {}; } };
 const countryName = (iso) => { const m = metaOf(iso, 0); return m.boundaryName || iso; };
 for (const [iso, list] of [...byIso.entries()].sort()) {
   list.sort((a, b) => a[0] - b[0]);
@@ -193,9 +201,9 @@ for (const [iso, list] of [...byIso.entries()].sort()) {
       const mk = parts.length > 1 ? { ...meta, key: `${key}_${pi}`, parentNames: meta.parentNames } : meta;
       // parent index stays the index into the previous level (names list shared)
       const r = writePack(path.join(OUT, file), mk, pu);
-      partInfo.push({ file, key: mk.key, count: pu.length, bbox: r.bbox, bytes: fs.statSync(path.join(OUT, file)).size, verts: r.verts });
+      partInfo.push({ file, key: mk.key, count: pu.length, bbox: r.bbox, bytes: fs.statSync(path.join(OUT, file)).size, verts: r.verts, cov: r.cov });
     });
-    manifest.push({ iso, title: meta.title, level: L, levelName: meta.levelName, count: units.length, source: meta.source, parts: partInfo, bbox: [Math.min(...partInfo.map((p) => p.bbox[0])), Math.max(...partInfo.map((p) => p.bbox[1])), Math.max(...partInfo.map((p) => p.bbox[2])), Math.min(...partInfo.map((p) => p.bbox[3]))] });
+    manifest.push({ iso, title: meta.title, level: L, levelName: meta.levelName, count: units.length, source: meta.source, parts: partInfo, bbox: [Math.min(...partInfo.map((p) => p.bbox[0])), Math.min(...partInfo.map((p) => p.bbox[1])), Math.max(...partInfo.map((p) => p.bbox[2])), Math.max(...partInfo.map((p) => p.bbox[3]))] });
     log(key, meta.levelName, units.length, 'units', partInfo.length, 'part(s)', (partInfo.reduce((s, p) => s + p.bytes, 0) / 1048576).toFixed(2), 'MB', ((Date.now() - t0) / 1000).toFixed(1) + 's');
     // keep this level for the next one's parent lookup
     prev = units.map((U) => { let bb = [Infinity, Infinity, -Infinity, -Infinity]; for (const pl of U.mpolys) for (const p of pl[0]) { bb[0] = Math.min(bb[0], p[0]); bb[1] = Math.min(bb[1], p[1]); bb[2] = Math.max(bb[2], p[0]); bb[3] = Math.max(bb[3], p[1]); } return { mpolys: U.mpolys, bb }; });

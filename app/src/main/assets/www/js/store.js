@@ -39,7 +39,7 @@ export function serialize(W) {
   for (let a = 0; a < nn; a++) for (let b = 0; b < nn; b++) rel[a * nn + b] = W.rel[a * MAXN + b];
   const custom = {}; for (const [k, v] of Object.entries(W.custom)) custom[k] = onLand(W, v, Float32Array);
   return {
-    format: 'atlasforge', v: 1, name: W.name, savedAt: Date.now(), seed: W.seed, rng: W.rng.state(), month: W.month, startYear: W.startYear,
+    format: 'atlasforge', v: 1, cdv: cellDataVersion(W.D), name: W.name, savedAt: Date.now(), seed: W.seed, rng: W.rng.state(), month: W.month, startYear: W.startYear,
     settings: W.settings, nations: W.nations.map((n) => n && { ...n }), blocs: W.blocs, wars: W.wars, truce: W.truce, news: W.news.slice(0, 150),
     formulas: W.formulas, mood: W.mood.slice(0, nn), nn, rel,
     owner: onLand(W, W.owner, Uint16Array), pop: onLand(W, W.pop, Float32Array), pop0: onLand(W, W.pop0, Float32Array), dev: onLand(W, W.dev, Float32Array),
@@ -68,8 +68,27 @@ export function deserialize(D, S) {
     W.timeline = { start: S.timeline.start, key: Uint16Array.from(S.timeline.key), deltas: S.timeline.deltas.map((d) => ({ m: d.m, idx: Int32Array.from(d.idx), val: Uint16Array.from(d.val) })) };
     W.tlLast = W.timeline.key.slice(); for (const d of W.timeline.deltas) for (let k = 0; k < d.idx.length; k++) W.tlLast[d.idx[k]] = d.val[k];
   } else initTimeline(W);
+  if (S.cdv !== cellDataVersion(D)) migrateOwners(W, D);
   computeAggregates(W); computeAdjacency(W);
   return W;
+}
+
+// A fingerprint of which real country every land cell belongs to; changes when the map data is rebuilt.
+function cellDataVersion(D) { const c = D.cells.country; let h = 2166136261; for (let i = 0; i < c.length; i += 7) { h ^= c[i]; h = Math.imul(h, 16777619); } return h >>> 0; }
+// Worlds saved with older map data: cells that still belong to their starting nation follow the new
+// real borders (otherwise borders show as cell staircases). Conquests made in the sim are kept.
+function migrateOwners(W, D) {
+  const country = D.cells.country, nC = D.units.countries.length, isOrig = (o) => o > 0 && o <= nC && W.nations[o] && W.nations[o].orig === o;
+  const tl = W.timeline, key = tl && tl.key && tl.key.length === W.land.length ? tl.key : null;
+  let fixed = 0;
+  for (let k = 0; k < W.land.length; k++) {
+    const i = W.land[k], c = country[i], o = W.owner[i];
+    if (!c || o === c || !isOrig(c) || !W.nations[c].alive) continue;
+    const start = key ? key[k] : o; // who held it when the timeline began
+    if (o !== start || !isOrig(o)) continue; // changed hands in the sim: keep
+    W.owner[i] = c; if (key) key[k] = c; if (W.tlLast) W.tlLast[k] = c; fixed++;
+  }
+  if (fixed) console.log('migrated', fixed, 'cells to the current borders');
 }
 
 // ---- portable file format: "AFW1" + u32 header length + JSON header + binary blobs, gzipped ----

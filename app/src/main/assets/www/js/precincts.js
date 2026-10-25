@@ -55,7 +55,17 @@ export function parsePack(raw) {
 
 // ---- manifests ----
 let levelsMf = null, usMf = null;
-export async function levelList() { if (levelsMf) return levelsMf; try { levelsMf = await (await fetch('levels/levels.json')).json(); } catch { levelsMf = []; } return levelsMf; }
+export async function levelList() {
+  if (levelsMf) return levelsMf;
+  try { levelsMf = await (await fetch('levels/levels.json')).json(); } catch { levelsMf = []; }
+  // US precincts (real election results) become United States level 5
+  try {
+    const pk = await packList();
+    if (pk.length && !levelsMf.some((m) => m.iso === 'USA' && m.level === 5)) levelsMf.push({ iso: 'USA', title: 'United States', level: 5, levelName: 'Voting precinct', count: pk.reduce((s, p) => s + p.count, 0), source: 'MGGG States', byState: true, precincts: true,
+      parts: pk.map((p) => ({ key: 'P_' + p.state, pk: p.state, title: p.title, count: p.count, bbox: p.bbox, verts: Math.round(p.bytes / 18) })), bbox: [-180, 18, -66, 72] });
+  } catch {}
+  return levelsMf;
+}
 export async function usList() { if (usMf) return usMf; try { usMf = await (await fetch('us/us.json')).json(); } catch { usMf = []; } return usMf; }
 
 // key formats: 'PA' (precincts), 'L:FRA_2' (admin level, may have parts), 'T:42' (US tracts), 'B:42' (US block groups)
@@ -100,7 +110,7 @@ export function mergePacks(list, key) {
     a += P.geom.uid.length; b += P.geom.luid.length; c += P.geom.idx.length; vo += P.geom.pos.length / 2; uo += P.count;
   }
   const f = list[0];
-  const M = { ...f, key, count: n, bbox: [Math.min(...list.map((P) => P.bbox[0])), Math.max(...list.map((P) => P.bbox[1])), Math.max(...list.map((P) => P.bbox[2])), Math.min(...list.map((P) => P.bbox[3]))],
+  const M = { ...f, key, count: n, bbox: [Math.min(...list.map((P) => P.bbox[0])), Math.min(...list.map((P) => P.bbox[1])), Math.max(...list.map((P) => P.bbox[2])), Math.max(...list.map((P) => P.bbox[3]))],
     pop: cat((P) => P.pop, Float32Array), area: cat((P) => P.area, Float32Array), perim: cat((P) => P.perim, Float32Array), county: cat((P) => P.county, Uint16Array),
     names: list.flatMap((P) => P.names), ids: list.flatMap((P) => P.ids), cx: cat((P) => P.cx, Float64Array), cy: cat((P) => P.cy, Float64Array), adj,
     units: list.flatMap((P) => P.units), geom: { pos: cat((P) => P.geom.pos, Float32Array), uid, idx, lpos: cat((P) => P.geom.lpos, Float32Array), luid, lnb, noNb: big ? 0xffffffff : 65535 } };
@@ -113,10 +123,14 @@ export async function loadPack(key, progress = () => {}) {
   if (loaded.has(key)) return loaded.get(key);
   let P;
   if (key.startsWith('L:')) {
-    const mf = await levelList(), [iso, L] = key.slice(2).split('_'), m = mf.find((x) => x.iso === iso && x.level === +L);
+    const mf = await levelList(), [iso, L, part] = key.slice(2).split('_'), m = mf.find((x) => x.iso === iso && x.level === +L);
     if (!m) throw new Error('Unknown level ' + key);
-    const parts = []; for (let i = 0; i < m.parts.length; i++) { progress(i / m.parts.length, `Loading ${m.title} · ${m.levelName} (${i + 1}/${m.parts.length})`); parts.push(await readPack('L:' + m.parts[i].key)); }
-    P = mergePacks(parts, key); P.title = m.title; P.levelName = m.levelName;
+    if (part != null) { // one state / part of a level
+      const pi = m.parts.find((x) => x.key === key.slice(2)); P = await readPack(key, progress); P.key = key; P.levelName = m.levelName; P.title = pi && pi.title ? pi.title : m.title;
+    } else {
+      const parts = []; for (let i = 0; i < m.parts.length; i++) { progress(i / m.parts.length, `Loading ${m.title} · ${m.levelName} (${i + 1}/${m.parts.length})`); parts.push(await readPack('L:' + m.parts[i].key)); }
+      P = mergePacks(parts, key); P.title = m.title; P.levelName = m.levelName;
+    }
   } else P = await readPack(key, progress);
   progress(1, 'Ready');
   if (loaded.size > 3) loaded.delete(loaded.keys().next().value); // keep memory in check
