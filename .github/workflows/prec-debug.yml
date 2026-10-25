@@ -1,0 +1,41 @@
+name: Precinct debug
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  dbg:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Restore precinct results
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/afraw/prec
+          key: prec-v1-${{ hashFiles('tools/fetch-precincts.mjs') }}
+      - name: Restore map data
+        uses: actions/cache/restore@v4
+        with:
+          path: app/src/main/assets/www/levels
+          key: none
+          restore-keys: levels-v2-
+      - name: Inspect
+        run: |
+          mkdir -p /tmp/out
+          ls ~/afraw/prec/48 ~/afraw/prec/06 ~/afraw/prec/12 > /tmp/out/files.txt 2>&1 || true
+          node -e '
+            const fs=require("fs"),zlib=require("zlib"),path=require("path"); const H=process.env.HOME;
+            for (const f of ["48","06","12","51"]) { const d=path.join(H,"afraw/prec",f); if(!fs.existsSync(d)) { console.log(f,"none"); continue; }
+              for (const x of fs.readdirSync(d)) { const S=JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(d,x)))); let bb=[1e9,1e9,-1e9,-1e9]; for (const p of S.prec) { bb[0]=Math.min(bb[0],p.b[0]); bb[1]=Math.min(bb[1],p.b[1]); bb[2]=Math.max(bb[2],p.b[2]); bb[3]=Math.max(bb[3],p.b[3]); }
+                const tot=S.offices.map((o,k)=>o.code+":"+Math.round(S.prec.reduce((s,p)=>s+p.v[k*3]+p.v[k*3+1],0))); console.log(f,x,S.prec.length,"bbox",bb.map(v=>v.toFixed(2)).join(","),tot.join(" ")); } }' > /tmp/out/sets.txt 2>&1
+          mkdir -p /tmp/p && cp app/src/main/assets/www/levels/USA_5_48.afz app/src/main/assets/www/levels/USA_3_06.afz app/src/main/assets/www/levels/USA_5_12.afz app/src/main/assets/www/levels/USA_5_51.afz /tmp/p/ 2>/dev/null || true
+          PREC_DEBUG=1 node tools/add-precinct-votes.mjs ~/afraw/prec /tmp/p > /tmp/out/add.txt 2>&1 || true
+      - name: Keep the output
+        if: always()
+        run: |
+          cd /tmp/out && git init -q && git checkout -q -b ci-log-prec
+          git config user.name ci && git config user.email ci@users.noreply.github.com
+          git add . && git commit -qm "prec debug" && git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" ci-log-prec

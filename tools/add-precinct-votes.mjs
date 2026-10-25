@@ -80,6 +80,7 @@ function processPack(file) {
   for (const S of sets) {
     const pOf = new Int32Array(n).fill(-1), members = new Map(); let wIn = 0, wAll = 0;
     for (let u = 0; u < n; u++) { wAll += W[u]; const i = findPrec(S, lng[u], lat[u]); if (i < 0) continue; pOf[u] = i; wIn += W[u]; let m = members.get(i); if (!m) members.set(i, m = []); m.push(u); }
+    if (process.env.PREC_DEBUG) log('  ', H.key || H.state, S.src, S.year, 'coverage', Math.round(wIn / (wAll || 1) * 100) + '%', S.prec.length, 'precincts', S.offices.map((o) => o.code).join(' '));
     if (wAll > 0 && wIn / wAll < 0.6) { log('  ', H.key || H.state, S.src, S.year, 'covers only', Math.round(wIn / wAll * 100) + '% — skipped'); continue; }
     const share = new Float64Array(n); // each area's share of its precinct
     for (const [, m] of members) { const t = m.reduce((s, u) => s + W[u], 0); for (const u of m) share[u] = t > 0 ? W[u] / t : 1 / m.length; }
@@ -89,6 +90,7 @@ function processPack(file) {
       const d = new Float32Array(n), r = new Float32Array(n), x = new Float32Array(n);
       for (let u = 0; u < n; u++) { const i = pOf[u]; if (i < 0) continue; const v = S.prec[i].v; d[u] += v[k * 3] * share[u]; r[u] += v[k * 3 + 1] * share[u]; x[u] += v[k * 3 + 2] * share[u]; }
       for (const [i, u] of orphans) { const v = S.prec[i].v; d[u] += v[k * 3]; r[u] += v[k * 3 + 1]; x[u] += v[k * 3 + 2]; }
+      if (process.env.PREC_DEBUG) { let pd = 0, pr = 0; for (const q of S.prec) { pd += q.v[k * 3]; pr += q.v[k * 3 + 1]; } log('     ', label, 'precinct totals D', Math.round(pd), 'R', Math.round(pr), have.has(label.toLowerCase()) ? '(already there)' : ''); }
       let tot = 0; for (let u = 0; u < n; u++) { d[u] = Math.round(d[u]); r[u] = Math.round(r[u]); x[u] = Math.round(x[u]); tot += d[u] + r[u]; } if (!(tot > 0)) return; // whole votes compress far better
       have.add(label.toLowerCase());
       added.push({ key: `${o.special ? 'S' : ''}${o.code}${String(S.year).slice(2)}`, label, year: S.year, src: S.src, d: blob(d), r: blob(r), o: blob(x) });
