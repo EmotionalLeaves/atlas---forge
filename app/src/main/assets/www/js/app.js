@@ -69,7 +69,7 @@ export async function boot() {
     app.basemap = new Basemap(document.getElementById('tilesBase'), document.getElementById('tilesLabels'), document.getElementById('attr'));
     app.basemap.onOffline = () => { app.basemapOffline = true; UI.refreshPanels(); app.basemap.setStyle('none'); app.R.opts.opacity = 1; app.R.opts.grid = app.show.grid; if (app.R.points) app.R.points.visible = app.show.cities; app.R.dirty(); };
     let lastCam = '';
-    app.R.onFrame = (R) => { app.basemap.update(R); const k = R.cam.x.toFixed(5) + R.cam.y.toFixed(5) + R.cam.s.toFixed(0); if (k !== lastCam) { lastCam = k; if (LV.level) scheduleLevelUpdate(app); scheduleRef(app); } };
+    app.R.onFrame = (R) => { app.basemap.update(R); const k = R.cam.x.toFixed(5) + R.cam.y.toFixed(5) + R.cam.s.toFixed(0); if (k !== lastCam) { lastCam = k; if (LV.level) scheduleLevelUpdate(app); scheduleRef(app); clearTimeout(app._lblT); app._lblT = setTimeout(() => UI.updateLevelLabels && UI.updateLevelLabels(), 400); } };
     applyMapStyle();
     window.addEventListener('resize', () => app.R.resize());
     // Android may drop the GPU context while the app is in the background: save, then reload from the autosave

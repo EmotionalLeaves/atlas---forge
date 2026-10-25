@@ -2,7 +2,7 @@
 import { h, fmt, pct, dateOf, esc, hex, parseHex, hsl, clamp, PARTY_COLORS, rampLUT, RAMPS } from './util.js';
 import { saveSettings, applyMapStyle, chooseLevel } from './app.js';
 import { BASEMAPS } from './basemap.js';
-import { app, setTheme, refresh, theme, plan, select, undoRedo, scheduleStats, computePlanStats, rebuildCatalog, setWorld, step, autosave, viewHistory, restoreHistory, usePack, ensurePlanPack } from './app.js';
+import { app, setTheme, refresh, theme, plan, select, undoRedo, scheduleStats, computePlanStats, rebuildCatalog, setWorld, step, autosave, viewHistory, restoreHistory, usePack, ensurePlanPack, cellAtScreen } from './app.js';
 import { packList, levelList } from './precincts.js';
 import { LV, LEVEL_THEMES, levelCoverage, levelThemesNow } from './levels.js';
 import { startGame, resolveEvent, endGame, POLICIES, rankOf } from './game.js';
@@ -291,9 +291,22 @@ let coverage = null;
 function levelSection() {
   if (!coverage) levelCoverage().then((c) => { coverage = c; refreshPanels(); });
   const c = coverage || [];
-  const el = section('Map level', h('div', { class: 'seg levels' }, LEVEL_NAMES.map((l, k) => h('button', { class: (LV.level || 0) === k ? 'on' : '', onclick: () => chooseLevel(k) }, h('b', null, k ? k : '🌐'), h('small', null, l)))),
+  const names = localLevelNames();
+  const el = section('Map level', h('div', { class: 'seg levels' }, LEVEL_NAMES.map((l, k) => h('button', { class: (LV.level || 0) === k ? 'on' : '', onclick: () => chooseLevel(k) }, h('b', null, k ? k : '🌐'), h('small', { 'data-lv': k }, names[k] || l)))),
     h('div', { class: 'muted small', id: 'levelStatus' }, (LV.level ? `${c[LV.level] || 0} countries have level ${LV.level}; others show their deepest level. ` : 'Real administrative areas for every country — tap a level. ') + (LV.note || '')));
   return el;
+}
+// what each level is called in the country at the middle of the map (Counties, Départements, Census tracts…)
+function localLevelNames() {
+  const out = [], mf = LV.mf; if (!mf || !app.R) return out;
+  const i = cellAtScreen(...app.R.visibleCenter), c = i >= 0 ? app.W.D.cells.country[i] : 0, a3 = c ? app.W.D.units.countries[c - 1].a3 : null;
+  if (!a3) return out;
+  for (const m of mf) if (m.iso === a3 && !/^Level \d/.test(m.levelName)) { const n = m.levelName[0].toUpperCase() + m.levelName.slice(1); out[m.level] = n.length > 13 ? n.slice(0, 12) + '…' : n; }
+  return out;
+}
+export function updateLevelLabels() {
+  if (app.mode !== 'explore') return; const names = localLevelNames();
+  document.querySelectorAll('.seg.levels small[data-lv]').forEach((e) => { const k = +e.dataset.lv; if (k) e.textContent = names[k] || LEVEL_NAMES[k]; });
 }
 function levelStatusHook(t) { const e = document.getElementById('levelStatus'); if (e && LV.level) e.textContent = `${(coverage || [])[LV.level] || 0} countries have level ${LV.level}. ${t || ''}`; }
 function renderExplore(b) {
