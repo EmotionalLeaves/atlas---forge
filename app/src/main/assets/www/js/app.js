@@ -193,6 +193,7 @@ function refreshInner() {
   if (LV.level && app.mode === 'explore') return refreshLevelView();
   const poly = polyLayerShown(), p = app.mode === 'draw' ? plan() : null;
   const base = app.baseRGBA, out = app.cellRGBA, grp = app.groupRGBA;
+  app._ovMix = null; app._polyOv = null;
   // ---- cell base colours
   if (t.layer === 'cells' && !poly) app.legend = colorize(t, land, N, t.value, base);
   else {
@@ -209,9 +210,11 @@ function refreshInner() {
   for (const k in app.R.polys) if (k.startsWith('lv:')) app.R.polys[k].visible = false; // map-level areas belong to Explore
   if (poly) {
     const units = layerFor(poly).units, arr = app.unitRGBA[poly];
-    const tt = t.layer === poly ? t : app.catalog.find((x) => x.layer === poly);
+    const ovT = p && p.unit === poly && app.overlay ? app.catalog.find((x) => x.id === app.overlay.id) : null, useOv = ovT && ovT.layer === poly;
+    const tt = useOv ? ovT : t.layer === poly ? t : app.catalog.find((x) => x.layer === poly);
     const lg = colorize(tt, null, units.length, tt.value, arr);
-    if (t.layer === poly) app.legend = lg;
+    if (useOv) { app._ovMix = app.overlay.alpha; app._polyOv = { ...lg, label: ovT.label }; }
+    else if (t.layer === poly) app.legend = lg;
     if (p && p.unit === poly) { app._unitBase = arr.slice(); overlayPlanUnits(p, arr); }
     districtOutlines(p && p.unit === poly ? p : null);
     app.R.setPolyColors(poly, arr);
@@ -232,11 +235,19 @@ function refreshInner() {
 
 // Edit → Overlay: another map laid see-through over the nations (cell maps as a second raster, region and
 // county maps as their polygons on top).
-export const overlayable = (t) => t && ['cells', 'provinces', 'counties'].includes(t.layer) && !t.id.startsWith('plan_');
+// What can sit on top: any world-grid map anywhere; region / county maps in Map and Edit; in Districts, any map
+// of the plan's own areas (precinct votes, race, density…), mixed into the district colours like Districtr.
+export function overlayable(t, mode = app.mode) {
+  if (!t || t.id === 'nations' || t.id.startsWith('plan_') || /_name$/.test(t.id)) return false; // colouring each area differently says nothing on top
+  if (t.layer === 'cells') return true;
+  const p = mode === 'draw' ? plan() : null;
+  if (mode === 'draw') return !!p && p.unit !== 'cells' && t.layer === p.unit;
+  return t.layer === 'provinces' || t.layer === 'counties';
+}
 function applyOverlay(land, N) {
-  const O = app.overlay, t = app.mode === 'edit' && O ? app.catalog.find((x) => x.id === O.id) : null;
-  app.overlayLegend = null;
-  if (!overlayable(t)) { app.R.setOverlay(null); return; }
+  const O = app.overlay, t = O ? app.catalog.find((x) => x.id === O.id) : null;
+  app.overlayLegend = app._polyOv || null;
+  if (!overlayable(t) || (app.mode === 'draw' && t.layer !== 'cells')) { app.R.setOverlay(null); return; } // Districts: mixed into the areas instead
   if (t.layer === 'cells') {
     const buf = app.ovRGBA || (app.ovRGBA = new Uint8Array(app.cellRGBA.length)); buf.fill(0);
     app.overlayLegend = colorize(t, land, N, t.value, buf);
@@ -260,6 +271,7 @@ function refreshLevelView() {
   app.R.setThickLines('nationBorders', null); districtOutlines(null);
   app.R.opts.grid = false;
   if (app.R.thick.realBorders) app.R.thick.realBorders.visible = app.show.borders;
+  app._polyOv = null; applyOverlay(land, app.W.N);
   app.R.setCellColors(app.cellRGBA); app.R.setCellGroups(app.groupRGBA);
   colorLevels(app); scheduleLevelUpdate(app); updateHighlight(); app.R.dirty();
 }
@@ -444,9 +456,11 @@ function overlayPlanUnits(p, arr, list) {
     const o = u * 4, d = p.assign[u];
     const br = base ? base[o] : arr[o], bg = base ? base[o + 1] : arr[o + 1], bb = base ? base[o + 2] : arr[o + 2];
     if (coiView) { const c = p.coiAssign ? p.coiAssign[u] : -1; if (c >= 0 && p.cois[c]) { const col = COI_COLORS[c % COI_COLORS.length]; arr[o] = col[0]; arr[o + 1] = col[1]; arr[o + 2] = col[2]; arr[o + 3] = 255; } else if (eligible(W, p, u)) { const dc = d >= 0 ? p.colors[d] : [120, 124, 132]; arr[o] = dc[0] * 0.3 + 40; arr[o + 1] = dc[1] * 0.3 + 42; arr[o + 2] = dc[2] * 0.3 + 48; arr[o + 3] = 235; } else { arr[o] = br * 0.4; arr[o + 1] = bg * 0.4; arr[o + 2] = bb * 0.45; arr[o + 3] = 150; } return; }
-    if (d >= 0 && !O.hideDistricts) { const c = districtCol(p, d); if (O.showData) { arr[o] = br * 0.45 + c[0] * 0.55; arr[o + 1] = bg * 0.45 + c[1] * 0.55; arr[o + 2] = bb * 0.45 + c[2] * 0.55; } else { arr[o] = c[0]; arr[o + 1] = c[1]; arr[o + 2] = c[2]; } arr[o + 3] = 255; }
+    const mix = app._ovMix; // strength of the data on top (Districtr-style: data shows through the district colours)
+    if (d >= 0 && !O.hideDistricts && mix != null) { const c = districtCol(p, d), k = 1 - mix; arr[o] = c[0] * k + br * mix; arr[o + 1] = c[1] * k + bg * mix; arr[o + 2] = c[2] * k + bb * mix; arr[o + 3] = 255; }
+    else if (d >= 0 && !O.hideDistricts) { const c = districtCol(p, d); if (O.showData) { arr[o] = br * 0.45 + c[0] * 0.55; arr[o + 1] = bg * 0.45 + c[1] * 0.55; arr[o + 2] = bb * 0.45 + c[2] * 0.55; } else { arr[o] = c[0]; arr[o + 1] = c[1]; arr[o + 2] = c[2]; } arr[o + 3] = 255; }
     else if (eligible(W, p, u)) {
-      if (O.showData || (d >= 0 && O.hideDistricts)) { arr[o] = br; arr[o + 1] = bg; arr[o + 2] = bb; arr[o + 3] = 235; }
+      if (mix != null || O.showData || (d >= 0 && O.hideDistricts)) { arr[o] = br; arr[o + 1] = bg; arr[o + 2] = bb; arr[o + 3] = 235; }
       else if (O.highlightUnassigned) { arr[o] = br * 0.3 + 175; arr[o + 1] = bg * 0.3 + 160; arr[o + 2] = bb * 0.3 + 95; arr[o + 3] = 235; }
       else { arr[o] = br * 0.3 + 160; arr[o + 1] = bg * 0.3 + 162; arr[o + 2] = bb * 0.3 + 168; arr[o + 3] = 235; }
     } else { arr[o] = br * 0.4; arr[o + 1] = bg * 0.4; arr[o + 2] = bb * 0.45; arr[o + 3] = 150; }
@@ -464,7 +478,7 @@ export function refreshCells(list) {
   app.R.setCellRows(app.cellRGBA, app.groupRGBA, Math.max(0, y0 - 1), Math.min(app.W.Hd - 1, y1 + 1));
   // a map laid on top follows the brush too (painting the very data it shows must show at once)
   const OL = app.overlayLegend;
-  if (app.mode === 'edit' && app.R.overlay && app.ovRGBA && OL && OL.colorOne) { for (const i of list) OL.colorOne(i, app.ovRGBA); app.R.setOverlayRows(app.ovRGBA, y0, y1); }
+  if (app.R.overlay && app.ovRGBA && OL && OL.colorOne && !app._polyOv) { for (const i of list) OL.colorOne(i, app.ovRGBA); app.R.setOverlayRows(app.ovRGBA, y0, y1); }
 }
 
 // ---------------------------------------------------------------- cities & labels

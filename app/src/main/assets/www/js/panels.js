@@ -12,7 +12,7 @@ import { encodePlan, decodePlan, applyDecoded, coiReport, ensureCoi, COI_COLORS,
 import { FORMULA_VARS, compileFormula, unitAgg } from './themes.js';
 import { listSlots, getSlot, putSlot, delSlot, serialize, deserialize, exportBlob, importBlob } from './store.js';
 import { createWorld } from './world.js';
-import { FOCUS, openPlacePicker, clearFocus, frameFocus } from './places.js';
+import { FOCUS, openPlacePicker, clearFocus, frameFocus, focusCountry, focusProvince, focusCounty } from './places.js';
 import { mercX, mercY } from './gl.js';
 import { cellAt } from './world.js';
 
@@ -87,11 +87,11 @@ export function init() {
   }
   $('#menuBtn').innerHTML = ICON.menu; $('#menuBtn').onclick = openMenu;
   $('#placeBtn').onclick = openPlacePicker;
-  $('#themeBtn').onclick = openThemeBrowser;
+  $('#themeBtn').onclick = openMapOptions;
   const fl = $('#floating');
   fl.append(h('button', { class: 'fab', 'aria-label': 'Search places', onclick: openSearch, html: ICON.search }),
     h('button', { class: 'fab', 'aria-label': 'Whole world', onclick: () => { if (FOCUS.cur) clearFocus(); worldView(); }, html: ICON.home }),
-    h('button', { class: 'fab', id: 'layersFab', 'aria-label': 'Map layers', onclick: openLayers, html: ICON.layers }),
+    h('button', { class: 'fab', id: 'layersFab', 'aria-label': 'Map options', onclick: openMapOptions, html: ICON.layers }),
     h('button', { class: 'fab', id: 'fsBtn', 'aria-label': 'Full screen', onclick: () => setFull(!app.full) }));
   // keep track of how much of the map the sheet covers so the camera frames the visible part
   const sheet = $('#sheet');
@@ -294,8 +294,8 @@ const dataLabel = () => { const a = app.dataAttr, v = app.dataValue; const nm = 
 // Small floating legend on the map for maps that colour by value.
 function mapLegend() {
   const el = $('#mapLegend'); if (!el) return;
-  const ov = app.mode === 'edit' && app.overlayLegend && app.overlayLegend.type === 'ramp', L = ov ? app.overlayLegend : app.legend, t = ov ? { label: app.overlayLegend.label } : theme();
-  if (!L || L.type !== 'ramp' || app.mode === 'draw' || t.noLegend) { el.hidden = true; return; }
+  const ov = app.overlayLegend && app.overlayLegend.type === 'ramp', L = ov ? app.overlayLegend : app.legend, t = ov ? { label: app.overlayLegend.label } : theme();
+  if (!L || L.type !== 'ramp' || (app.mode === 'draw' && !ov) || t.noLegend) { el.hidden = true; return; }
   el.hidden = false; el.innerHTML = '';
   const c = h('canvas', { width: 128, height: 1 }); const x = c.getContext('2d'); const img = x.createImageData(128, 1); const lut = rampLUT(L.ramp);
   for (let i = 0; i < 128; i++) { const k = Math.round((L.invert ? 127 - i : i) * 255 / 127); img.data.set([lut[k * 3], lut[k * 3 + 1], lut[k * 3 + 2], 255], i * 4); } x.putImageData(img, 0, 0);
@@ -306,7 +306,12 @@ export function refreshPanels() {
   const safe = (f) => { try { f(); } catch (e) { console.error(e); } }; // one broken part must not freeze the rest
   safe(renderDock); safe(renderHint); safe(mapLegend);
   safe(() => { $('#date').textContent = app.mode === 'draw' && plan() ? plan().name : FOCUS.cur ? FOCUS.cur.sub : 'Tap to choose a place'; $('#placeName').textContent = FOCUS.cur ? FOCUS.cur.name : 'Whole world'; });
-  safe(() => { const t = theme(); $('#themeBtn').innerHTML = ''; $('#themeBtn').append(h('span', { class: 'swatch ' + (t.kind === 'cat' ? 'cat' : ''), style: { background: swatchBg(t) } }), h('span', { class: 'tl' }, t.label), h('span', { class: 'caret' }, '▾')); });
+  safe(() => { // the map chip: what colours the map, plus any data on top — opens every map option
+    const t = theme(), O = app.overlay, ot = O && app.catalog.find((x) => x.id === O.id), ov = ot && overlayable(ot) ? ot : null, p = app.mode === 'draw' ? plan() : null;
+    const main = p ? (ov ? null : 'Map options') : t.label, sw = p ? (ov || null) : t;
+    $('#themeBtn').innerHTML = '';
+    $('#themeBtn').append(h('span', { class: 'swatch ' + (sw && sw.kind === 'cat' ? 'cat' : ''), style: { background: sw ? swatchBg(sw) : 'var(--panel3)' } }), h('span', { class: 'tl' }, [main, ov ? (main ? '+ ' : '') + ov.label : null].filter(Boolean).join(' ')), h('span', { class: 'caret' }, '▾'));
+  });
   const body = $('#sheetBody'); const scroll = body.scrollTop;
   const next = document.createDocumentFragment();
   safe(() => {
@@ -373,7 +378,7 @@ export function mapStyleSection(redraw) {
   const out = h('b', null, Math.round(st.opacity * 100) + '%');
   return section('Base map',
     h('div', { class: 'chips' }, Object.entries(BASEMAPS).map(([k, b]) => h('button', { class: 'chip-s' + (st.basemap === k ? ' on' : ''), onclick: () => { st.basemap = k; app.basemapOffline = false; saveSettings(); applyMapStyle(); again(); } }, b.label))),
-    online && !app.basemapOffline ? h('label', { class: 'slider' }, 'Overlay', h('input', { type: 'range', min: 0, max: 1, step: 0.02, value: st.opacity, oninput: (e) => { st.opacity = +e.target.value; out.textContent = Math.round(st.opacity * 100) + '%'; app.R.opts.opacity = st.opacity; app.R.dirty(); }, onchange: saveSettings }), out) : null,
+    online && !app.basemapOffline ? h('label', { class: 'slider' }, 'Colour strength', h('input', { type: 'range', min: 0, max: 1, step: 0.02, value: st.opacity, oninput: (e) => { st.opacity = +e.target.value; out.textContent = Math.round(st.opacity * 100) + '%'; app.R.opts.opacity = st.opacity; app.R.dirty(); }, onchange: saveSettings }), out) : null,
     online && BASEMAPS[st.basemap].labels ? toggle('Place names on top', st.mapLabels, (v) => { st.mapLabels = v; saveSettings(); applyMapStyle(); }) : null,
     app.basemapOffline && st.basemap !== 'none' ? h('div', { class: 'offline' }, 'Offline — showing the built-in map. ', h('button', { class: 'linkbtn', onclick: () => { app.basemapOffline = false; applyMapStyle(); refreshPanels(); } }, 'Try again')) : online ? h('div', { class: 'muted small' }, 'Online map. Every area you look at is saved on your phone, so it still shows without internet.') : h('div', { class: 'muted small' }, 'Built-in map: works fully offline, with roads, railways, rivers and towns as you zoom in.'),
     online ? tileCacheRow() : null);
@@ -428,30 +433,9 @@ function levelStatusHook(t) { const e = document.getElementById('levelStatus'); 
 function renderExplore(b) {
   const wc = welcomeCard(); if (wc) b.append(wc);
   b.append(section(null, h('div', { class: 'legendBox' }, legendEl())));
-  b.append(levelSection());
-  if (LV.level) {
-    b.append(section('Colour areas by', h('div', { class: 'lvThemes' }, quickThemes(levelThemesNow().map((t) => [t.id, t.label])))));
-    return;
-  }
-  b.append(section('Colour the map by', quickThemes([['nations', 'Nations'], ['density', 'Population'], ['c_gdppc', 'Wealth'], ['lean', 'Politics'], ['terrain', 'Terrain'], ['climate', 'Climate']]),
-    btn(`More maps (${app.catalog.length.toLocaleString()})`, openThemeBrowser, 'wide')));
+  b.append(...mapOptionSections(refreshPanels)); // the Map tab is the map options, in place
 }
 // Base map, overlays and what is drawn on top — one panel from the layers button.
-export function openLayers() {
-  const body = h('div', null);
-  const draw = () => {
-    body.innerHTML = '';
-    body.append(mapStyleSection(() => draw()));
-    body.append(section('On the map', h('div', { class: 'tog-row col' },
-      toggle('Real borders', app.show.borders, (v) => { app.show.borders = v; refresh(); }),
-      toggle('Cities', app.show.cities, (v) => { app.show.cities = v; applyMapStyle(); }),
-      toggle('Labels', app.show.labels, (v) => { app.show.labels = v; app.R.dirty(); }),
-      toggle('Roads, railways and rivers (built-in map)', app.show.roads !== false, (v) => { app.show.roads = v; applyMapStyle(); }),
-      toggle('Cell grid when zoomed in', app.show.grid, (v) => { app.show.grid = v; refresh(); }))));
-  };
-  draw(); openModal('Map layers', body);
-}
-
 // ------------------------------------------------------------------ info card
 export function showInfo() { infoOpen = true; app.tappedOnce = true; if (app.sheet === 'peek') setSheet('half'); refreshPanels(); $('#sheetBody').scrollTop = 0; }
 export function hideInfo() { infoOpen = false; select(null); }
@@ -720,16 +704,17 @@ function renderDraw(b) {
   const st = app.stats;
   if (st) b.append(planSummary(p, st));
   if (app.drawTab === 'results') { renderPopTab(b, p, st); renderEvalTab(b, p, st); return; }
-  if (app.drawTab === 'layers' || app.drawTab === 'coi') {
+  if (app.drawTab === 'layers') app.drawTab = 'more'; // its options live in Map options now
+  if (app.drawTab === 'coi') {
     b.append(h('button', { class: 'linkbtn back', onclick: () => { const was = app.drawTab; app.drawTab = 'more'; if (was === 'coi') refresh(); refreshPanels(); } }, '‹ More'));
-    return app.drawTab === 'layers' ? renderLayersTab(b, p) : renderCoiTab(b, p);
+    return renderCoiTab(b, p);
   }
   if (app.drawTab === 'more') {
     const O = app.drawOpts;
     if (W.plans.length > 1) b.append(h('label', { class: 'field' }, 'Plan', h('select', { onchange: async (e) => { app.activePlan = +e.target.value; app.district = 0; await ensurePlanPack(); computePlanStats(); refresh(); refreshPanels(); } }, W.plans.map((x) => h('option', { value: x.id, selected: x.id === p.id }, x.name + (x.status && x.status !== 'Scratch work' ? ` · ${x.status}` : ''))))));
     const item = (ic, title, text, fn) => h('button', { class: 'act', onclick: fn }, ic ? h('span', { class: 'ic', html: ICON[ic] }) : null, h('span', null, h('b', null, title), h('small', null, text)));
     b.append(item('pin', 'Communities', 'Mark neighbourhoods that should stay in one district', () => { app.drawTab = 'coi'; refresh(); refreshPanels(); }),
-      item('layers', 'What the map shows', 'Data under your districts, boundaries, colour by vote', () => { app.drawTab = 'layers'; refreshPanels(); }),
+      item('layers', 'Map options', 'Data on top (votes, race, population), boundaries, base map', openMapOptions),
       item('gear', 'Plan options', 'Rename, share, copy, export or delete this plan', () => openPlanMenu(p)),
       item('plus', 'New plan', 'Start another map', () => openModal('New district plan', newPlanForm(true))));
     b.append(section('Painting', h('div', { class: 'tog-row col' },
@@ -808,20 +793,6 @@ function renderPopTab(b, p, st) {
       h('span', { class: 'lock', onclick: (e) => { e.stopPropagation(); p.locked[d.k] = !p.locked[d.k]; refreshPanels(); } }, p.locked[d.k] ? '🔒' : '🔓')));
   }
   b.append(list, h('p', { class: 'muted small' }, 'The white tick is the ideal population. Tap a district to paint it; tap the lock to protect it from painting.'));
-}
-function renderLayersTab(b, p) {
-  const O = app.drawOpts, redraw = () => { refresh(); refreshPanels(); };
-  b.append(section('Districts',
-    h('div', { class: 'tog-row col' },
-      toggle('Show data underneath (mix colours)', O.showData, (v) => { O.showData = v; redraw(); }),
-      toggle('Hide districts', O.hideDistricts, (v) => { O.hideDistricts = v; redraw(); }),
-      toggle('Highlight unassigned areas', O.highlightUnassigned, (v) => { O.highlightUnassigned = v; redraw(); }),
-      toggle('Colour districts by vote (blue ↔ red)', O.byVote, (v) => { O.byVote = v; redraw(); }),
-      toggle(`Show ${p.unit === 'provinces' ? 'country' : 'province / state'} boundaries`, O.boundaries, (v) => { O.boundaries = v; redraw(); }))));
-  const t = theme();
-  b.append(section('Data layer', h('div', { class: 'paintwith' }, h('span', null, t.layer === (p.unit === 'cells' ? 'cells' : p.unit) ? t.label : 'Pick a map for these units'), btn('Choose ›', openThemeBrowser, 'sm')),
-    h('p', { class: 'muted small' }, p.unit === 'counties' ? 'Try Hispanic %, Black %, Minority % or density under your districts.' : 'Any map for this kind of unit can sit under your districts.')));
-  b.append(mapStyleSection());
 }
 // ---- automatic map drawing (ReCom optimiser in a background worker) ----
 export function openAutoDraw(p) {
@@ -940,109 +911,135 @@ function zoomToDistrict(p, d) {
   if (p.unit === 'cells') { for (const i of W.land) if (p.assign[i] === d) { const x = i % W.Wd, y = (i / W.Wd) | 0; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); } if (x0 > x1) return; const dd = 360 / W.Wd; app.R.fitBounds(-180 + x0 * dd, 90 - (y1 + 1) * dd, -180 + (x1 + 1) * dd, 90 - y0 * dd); return; }
   const c = app.planCentroids && app.planCentroids[d]; if (!c) return; app.R.cam.x = c[0]; app.R.cam.y = c[1]; app.R.cam.s = Math.max(app.R.cam.s, 3000 * app.R.dpr); app.R.clampCam(); app.R.dirty();
 }
+// New plan, Districtr 2 style: pick a place (search), pick what to build from, then paint. Local areas of any
+// country are the default; US counties nationwide, provinces and the world grid sit under "Other ways".
 function newPlanForm(inModal) {
-  const W = app.W, U = W.D.units;
-  const st = { name: 'Plan ' + (W.plans.length + 1), unit: 'precincts', scope: U.countries.findIndex((c) => c.a3 === 'USA') + 1, n: 10, random: false, pack: app.precinctPreset || 'PA', real: -1 }; app.precinctPreset = null;
-  // start from the chosen place (header button): its state, county or country
-  // no chosen place? use whatever is in the middle of the map, once zoomed in to a country
-  let F = FOCUS.cur;
-  if (!F && app.R.cam.s / app.R.dpr > 1200) {
-    const cc = app._centerCell, i = cc && Date.now() - cc.t < 3000 ? cc.i : cellAtScreen(...app.R.visibleCenter), C = W.D.cells;
-    if (i >= 0 && C.country[i]) {
-      const c = U.countries[C.country[i] - 1], cty = C.county[i] ? U.counties[C.county[i] - 1] : null;
-      if (c && c.a3 === 'USA' && cty) F = { kind: 'province', a3: 'USA', name: cty.s };
-      else if (c && c.a3 !== 'USA') F = { kind: 'country', a3: c.a3, name: c.name };
+  const W = app.W, U = W.D.units, usaCi = U.countries.findIndex((c) => c.a3 === 'USA') + 1;
+  const st = { name: '', custom: false, n: 10, customN: false, random: false, real: -1, mode: 'place', place: null, opt: null, other: 'provinces', otherScope: 0 };
+  let packs = [], lvls = [], loaded = false;
+  // ---- places
+  const usState = (name) => US_STATES.find((x) => x[2] === name);
+  const placeOfCountry = (ci) => { const c = U.countries[ci - 1]; return c ? { kind: 'country', a3: c.a3, ci, name: c.name, sub: c.continent || 'Country' } : null; };
+  const placeOfState = (name) => { const s = usState(name); return s ? { kind: 'state', a3: 'USA', ci: usaCi, name, fips: s[0], ab: s[1], seats: s[3], sub: 'State · United States' } : null; };
+  const placeOfCounty = (k) => { const c = U.counties[k]; const s = c && usState(c.s); return s ? { kind: 'county', a3: 'USA', ci: usaCi, name: c.n, county: k, state: c.s, fips: s[0], ab: s[1], sub: `County · ${c.s}` } : null; };
+  // start from the chosen place, a preset from a map card, or what's in the middle of the map
+  const presetPlace = () => {
+    if (app.precinctPreset) { const s = US_STATES.find((x) => x[1] === app.precinctPreset); if (s) return placeOfState(s[2]); }
+    if (app.admPreset) {
+      if (app.admPreset === 'USA' && app.admPresetPart) { const m = /^L:USA_\d+_(\d\d)$/.exec(app.admPresetPart), s = m && US_STATES.find((x) => x[0] === m[1]); if (s) return placeOfState(s[2]); }
+      const ci = U.countries.findIndex((c) => c.a3 === app.admPreset) + 1; if (ci) return placeOfCountry(ci);
     }
-  }
-  if (F && F.a3 === 'USA' && (F.kind === 'province' || F.kind === 'county')) {
-    const sName = F.kind === 'county' ? F.state : F.name, s = US_STATES.find((x) => x[2] === sName);
-    if (s) st.pack = s[1];
-    if (F.kind === 'county') { st.onlyCounty = F.name; st.custom = true; st.name = `${F.name} plan`; }
-  } else if (F && F.a3 && F.a3 !== 'USA' && (F.kind === 'country' || F.kind === 'province') && !app.admPreset) {
-    st.unit = 'admin'; app.admPreset = F.a3; app.admPresetLevel = 2;
-  }
-  // district count follows the real world unless the user types one
-  const FC = FOCUS.cur, focusState = FC && FC.a3 === 'USA' && FC.kind === 'province' ? US_STATES.find((x) => x[2] === FC.name) : null; // only a chosen place limits a counties plan
-  const realN = () => st.onlyCounty ? COUNTY_SEATS : st.unit === 'counties' ? (focusState ? focusState[3] : 435) : st.unit === 'admin' && st.adm ? (seatsFor(String(st.adm).slice(2, 5)) || st.n) : (st.unit === 'cells' || st.unit === 'provinces') && st.scope ? (seatsFor(U.countries[st.scope - 1].a3) || st.n) : st.n;
-  const setRealN = () => {
-    if (st.customN) return; let n = realN();
-    if (st.unit === 'admin' && st.adm && typeof curLevel === 'function') { const m = curLevel(), part = m && m.byState ? m.parts.find((q) => 'L:' + q.key === st.adm) : null, count = part ? part.count : m ? m.count : n; n = Math.min(n, Math.max(2, count)); } // never more districts than areas
-    st.n = n; nInput.value = n;
-    const real = realN(); seatNote.textContent = real > n ? `The real parliament has ${real} seats, but this level only has ${n} areas, so each area would be its own district. Pick a finer level to draw ${real}.` : '';
+    const F = FOCUS.cur;
+    if (F) {
+      if (F.kind === 'county') return placeOfCounty(F.county);
+      if (F.kind === 'province' && F.a3 === 'USA') return placeOfState(F.name);
+      if (F.country && F.kind !== 'continent') return placeOfCountry(F.country);
+    }
+    if (app.R.cam.s / app.R.dpr > 1200) {
+      const cc = app._centerCell, i = cc && Date.now() - cc.t < 3000 ? cc.i : cellAtScreen(...app.R.visibleCenter), C = W.D.cells;
+      if (i >= 0 && C.country[i]) { const c = U.countries[C.country[i] - 1], cty = C.county[i] ? U.counties[C.county[i] - 1] : null; if (c && c.a3 === 'USA' && cty) return placeOfState(cty.s); return placeOfCountry(C.country[i]); }
+    }
+    return null;
   };
-  const seatNote = h('div', { class: 'muted small' });
-  const scopeSel = h('select', { onchange: (e) => { st.scope = +e.target.value; setRealN(); } },
-    h('option', { value: 0 }, 'Whole world'), [...U.countries.map((c, k) => [c.name, k + 1])].sort().map(([n, v]) => h('option', { value: v, selected: v === st.scope }, n)));
-  // any of the 50 states (+ DC): real precincts where we have them, otherwise 2020 census voting districts,
-  // block groups or tracts — like Districtr 2
-  const stateSel = h('select', { onchange: () => fillUnits() }), unitSel = h('select', { onchange: () => { st.pack = unitSel.value; showPack(); } });
-  const packInfo = h('div', { class: 'muted small' });
-  const realSel = h('select', { onchange: (e) => { st.real = +e.target.value; } }), realRow = h('label', null, 'Start from', realSel);
+  // ---- what each place can be built from
+  const optionsFor = (pl) => {
+    if (!pl) return [];
+    const out = [], onlyCounty = pl.kind === 'county' ? pl.name : null;
+    if (pl.kind === 'state' || pl.kind === 'county') {
+      const mg = packs.find((x) => x.state === pl.ab);
+      if (mg) out.push({ id: 'P:' + pl.ab, unit: 'precincts', pack: pl.ab, label: 'Precincts with real election results', sub: `${mg.count.toLocaleString()} precincts · ${mg.elections.length} elections · real district maps (2010 census)`, count: mg.count, onlyCounty, real: mg });
+      for (const [L, label, note] of [[5, 'Voting districts', '2020 census population and race · votes estimated from county results'], [4, 'Census block groups', '2020 census population and race'], [3, 'Census tracts', '2020 census population and race']]) {
+        const m = lvls.find((x) => x.iso === 'USA' && x.level === L && x.byState && !x.precincts), part = m && m.parts.find((p) => p.key === `USA_${L}_${pl.fips}`);
+        if (part) out.push({ id: 'L:' + part.key, unit: 'precincts', pack: 'L:' + part.key, label, sub: `${part.count.toLocaleString()} areas · ${note}`, count: part.count, onlyCounty });
+      }
+      if (pl.kind === 'state') out.push({ id: 'counties', unit: 'counties', label: 'Counties', sub: `${U.counties.filter((c) => c.s === pl.name).length} counties · census population`, count: U.counties.filter((c) => c.s === pl.name).length, onlyState: pl.name });
+      return out;
+    }
+    if (pl.a3 === 'USA') out.push({ id: 'counties', unit: 'counties', label: 'Counties', sub: `${U.counties.length.toLocaleString()} counties · census population`, count: U.counties.length });
+    for (const m of lvls.filter((x) => x.iso === pl.a3 && !x.precincts && !x.byState).sort((a, b) => a.level - b.level))
+      out.push({ id: `L:${m.iso}_${m.level}`, unit: 'precincts', pack: `L:${m.iso}_${m.level}`, label: /^level \d/i.test(m.levelName) ? `Local areas, level ${m.level}` : m.levelName[0].toUpperCase() + m.levelName.slice(1), sub: `${m.count.toLocaleString()} areas · level ${m.level} of 5${m.count > 60000 ? ' · too many for a phone' : ''}`, count: m.count, level: m.level, heavy: m.count > 60000 });
+    if (!out.length) out.push({ id: 'provinces', unit: 'provinces', scope: pl.ci, label: 'Provinces and states', sub: `${U.provinces.filter((p) => p.c === pl.ci).length} areas`, count: U.provinces.filter((p) => p.c === pl.ci).length });
+    return out;
+  };
+  const seatsOf = (pl) => !pl ? 10 : pl.kind === 'county' ? COUNTY_SEATS : pl.kind === 'state' ? pl.seats : seatsFor(pl.a3) || 10;
+  // the default: real precincts for a US state; otherwise the coarsest level with room for the real number of seats
+  const defaultOpt = (pl, opts) => {
+    if (app.admPresetPart || app.admPresetLevel) { const id = app.admPresetPart && app.admPresetPart.startsWith('L:') ? app.admPresetPart : `L:${pl.a3}_${app.admPresetLevel}`; const o = opts.find((x) => x.id === id); if (o) return o; }
+    if (pl.kind === 'state' || pl.kind === 'county') return opts.find((o) => o.id.startsWith('P:')) || opts.find((o) => o.id.includes('_5_')) || opts[0];
+    const need = seatsOf(pl) * 3, light = opts.filter((o) => !o.heavy && o.count <= 15000);
+    return light.find((o) => o.count >= need) || light[light.length - 1] || opts[0];
+  };
+  // ---- UI pieces
+  const placeBox = h('div'), optBox = h('div', { class: 'ucards', role: 'radiogroup', 'aria-label': 'Build from' }), status = h('div', { class: 'muted small' });
   const nInput = h('input', { type: 'number', min: 2, max: 650, value: st.n, oninput: (e) => { st.n = clamp(+e.target.value || 2, 2, 650); st.customN = true; realLink.hidden = false; } });
-  // typed your own number? one tap goes back to the real-world count
-  const realLink = h('button', { class: 'linkbtn', hidden: true, onclick: (e) => { e.preventDefault(); st.customN = false; realLink.hidden = true; if (st.unit === 'precincts') fillUnits(); else if (st.unit === 'admin') admInfo(); else setRealN(); } }, 'Use the real-world number');
-  let packs = [], usLv = [];
-  const preset = US_STATES.find((x) => x[1] === st.pack) || US_STATES.find((x) => x[1] === 'PA');
-  stateSel.append(...US_STATES.map(([f, ab, name]) => h('option', { value: f, selected: f === preset[0] }, name)));
-  const fillUnits = () => {
-    const [f, ab, name, seats] = US_STATES.find((x) => x[0] === stateSel.value), opts = [];
-    const mg = packs.find((x) => x.state === ab); if (mg) opts.push([ab, `Precincts with real election results (${mg.count.toLocaleString()})`]);
-    for (const [L, label] of [[5, 'Voting districts, 2020 census'], [4, 'Census block groups'], [3, 'Census tracts']]) { const m = usLv.find((x) => x.level === L), part = m && m.parts.find((p) => p.key === `USA_${L}_${f}`); if (part) opts.push(['L:' + part.key, `${label} (${part.count.toLocaleString()})`]); }
-    unitSel.innerHTML = ''; unitSel.append(...opts.map(([v, l]) => h('option', { value: v }, l)));
-    if (!opts.length) unitSel.append(h('option', { value: '' }, 'Not available in this build'));
-    st.pack = unitSel.value; if (!st.customN && st.unit === 'precincts') { st.n = st.onlyCounty ? COUNTY_SEATS : seats; nInput.value = st.n; }
-    if (!st.custom && st.unit === 'precincts') { st.name = `${name} plan`; nameIn.value = st.name; }
-    showPack();
+  const realLink = h('button', { class: 'linkbtn', hidden: true, onclick: (e) => { e.preventDefault(); st.customN = false; realLink.hidden = true; setN(); } }, 'Use the real-world number');
+  const seatNote = h('div', { class: 'muted small' });
+  const nameIn = h('input', { placeholder: 'Named after the place', oninput: (e) => { st.name = e.target.value; st.custom = true; } });
+  const realSel = h('select', { onchange: (e) => { st.real = +e.target.value; } }), realRow = h('label', { hidden: true }, 'Start from', realSel);
+  const setN = () => {
+    const real = st.mode === 'place' ? seatsOf(st.place) : st.other === 'counties' ? 435 : seatsFor(st.otherScope ? U.countries[st.otherScope - 1].a3 : '') || 10;
+    const cap = st.mode === 'place' && st.opt ? Math.max(2, st.opt.count) : 650;
+    if (!st.customN) { st.n = Math.min(real, cap); nInput.value = st.n; }
+    seatNote.textContent = st.mode === 'place' && st.opt && real > st.opt.count ? `The real number is ${real}, but there are only ${st.opt.count} ${st.opt.label.toLowerCase()} here, so each would be its own district. Pick smaller areas to draw ${real}.` : '';
   };
-  const showPack = () => {
-    const m = packs.find((x) => x.state === st.pack);
-    realRow.style.display = m ? '' : 'none'; st.real = -1;
-    if (m) {
-      packInfo.textContent = `${m.elections.length} real elections (2010 census populations).`;
-      realSel.innerHTML = ''; realSel.append(h('option', { value: -1 }, 'Blank — draw it yourself'), ...m.plans.map((pl, k) => h('option', { value: k }, `${pl.label} (${pl.n} districts)`)));
-    } else packInfo.textContent = st.pack ? '2020 census population and race. Votes are county presidential results spread by voting-age population (estimates).' : '';
+  const autoName = () => { if (st.custom) return; st.name = st.mode === 'place' ? `${st.place ? st.place.name : 'My'} ${st.opt ? st.opt.label.toLowerCase().replace(/ with real election results/, '') : ''} plan`.replace(/\s+/g, ' ') : ({ counties: 'US counties plan', provinces: 'Provinces plan', cells: 'World grid plan' })[st.other]; nameIn.value = st.name; };
+  const drawOpts = () => {
+    optBox.innerHTML = '';
+    if (!st.place) { optBox.append(h('p', { class: 'muted small' }, 'Choose a place first.')); return; }
+    if (!loaded) { optBox.append(h('p', { class: 'muted small' }, 'Loading…')); return; }
+    const opts = optionsFor(st.place);
+    if (!st.opt || !opts.some((o) => o.id === st.opt.id)) st.opt = defaultOpt(st.place, opts);
+    for (const o of opts) optBox.append(h('button', { role: 'radio', 'aria-checked': String(st.mode === 'place' && st.opt === o), class: st.mode === 'place' && st.opt && st.opt.id === o.id ? 'on' : '', disabled: !!o.heavy, onclick: () => { st.mode = 'place'; st.opt = o; st.real = -1; drawAll(); } }, h('b', null, o.label), h('small', null, o.sub)));
+    if (st.place.kind === 'county') optBox.append(h('p', { class: 'muted small' }, `Only ${st.place.name}'s areas will be in the plan.`));
+    const mg = st.mode === 'place' && st.opt && st.opt.real;
+    realRow.hidden = !mg || st.place.kind === 'county';
+    if (mg) { realSel.innerHTML = ''; realSel.append(h('option', { value: -1 }, 'Blank — draw it yourself'), ...mg.plans.map((pl, k) => h('option', { value: k, selected: k === st.real }, `${pl.label} (${pl.n} districts)`))); }
   };
-  Promise.all([packList(), levelList()]).then(([list, L]) => { packs = list; usLv = L.filter((m) => m.iso === 'USA' && m.byState && !m.precincts); fillUnits(); });
-  const nameIn = h('input', { value: st.name, oninput: (e) => { st.name = e.target.value; st.custom = true; } });
-  const pctRows = h('div', null, h('label', null, 'State', stateSel), h('label', null, 'Build from', unitSel), packInfo, realRow);
-  // admin areas of any country, any level
-  // levels split by state (US tracts / block groups) draw one state at a time
-  const admCountry = h('select', { onchange: () => fillLevels() }), admLevel = h('select', { onchange: () => fillParts() }), admPart = h('select', { onchange: () => { st.adm = admPart.value; admInfo(); } }), admNote = h('div', { class: 'muted small' });
-  const partRow = h('label', { style: { display: 'none' } }, 'State', admPart);
-  let lvls = [];
-  const curLevel = () => lvls.find((x) => `${x.iso}_${x.level}` === admLevel.value);
-  const admInfo = () => {
-    const m = curLevel(); if (!m) { admNote.textContent = ''; return; }
-    const part = m.byState ? m.parts.find((p) => 'L:' + p.key === st.adm) : null, count = part ? part.count : m.count;
-    admNote.textContent = `${count.toLocaleString()} areas · ${m.source}` + (count > 60000 ? ' — too many to draw on a phone; pick a higher level' : '');
-    if (st.unit === 'admin' && !st.custom) { st.name = `${part ? part.title : m.title} ${m.levelName} plan`; nameIn.value = st.name; }
-    if (st.unit === 'admin') { if (m.iso === 'USA' && part) { const s = US_STATES.find((x) => x[2] === part.title); if (s && !st.customN) { st.n = s[3]; nInput.value = st.n; } } else setRealN(); }
-    if (st.unit === 'admin' && !st.customN && st.n > count) { st.n = Math.max(2, count); nInput.value = st.n; } // can't have more districts than areas
+  // place: the chosen place as a card, or a search box with suggestions (Districtr 2's "choose a place")
+  const drawPlace = (searching) => {
+    placeBox.innerHTML = '';
+    if (st.place && !searching) {
+      placeBox.append(h('button', { class: 'pickrow', onclick: () => drawPlace(true) }, h('span', { class: 'sw', style: { background: 'var(--accent)' } }), h('span', null, h('small', null, st.place.sub), h('b', null, st.place.name)), h('span', { class: 'prchg' }, 'Change')));
+      return;
+    }
+    const list = h('div', { class: 'tlist sugg' });
+    const fill = (q) => {
+      list.innerHTML = ''; q = q.trim().toLowerCase();
+      const hits = [];
+      if (!q) { for (const ci of U.countries.map((c, k) => k + 1).sort((a, b) => U.countries[b - 1].pop - U.countries[a - 1].pop).slice(0, 6)) hits.push(placeOfCountry(ci)); hits.push(placeOfState('Pennsylvania'), placeOfState('Texas')); }
+      else {
+        U.countries.forEach((c, k) => { if (c.name.toLowerCase().includes(q)) hits.push(placeOfCountry(k + 1)); });
+        US_STATES.forEach((s) => { if (s[2].toLowerCase().includes(q) || s[1].toLowerCase() === q) hits.push(placeOfState(s[2])); });
+        if (q.length >= 3) U.counties.forEach((c, k) => { if (c.n.toLowerCase().includes(q) && hits.length < 40) hits.push(placeOfCounty(k)); });
+        hits.sort((a, b) => (b.name.toLowerCase().startsWith(q) ? 1 : 0) - (a.name.toLowerCase().startsWith(q) ? 1 : 0));
+      }
+      for (const pl of hits.filter(Boolean).slice(0, 10)) list.append(h('button', { class: 'titem', onclick: () => { st.place = pl; st.opt = null; st.mode = 'place'; st.customN = false; realLink.hidden = true; drawAll(); } }, h('span', { class: 'kind k-' + (pl.kind === 'country' ? 'country' : pl.kind === 'state' ? 'province' : 'county') }, pl.kind === 'country' ? 'CTRY' : pl.kind === 'state' ? 'STATE' : 'CNTY'), h('span', null, pl.name, h('small', { class: 'block' }, pl.sub))));
+      if (!list.children.length) list.append(h('p', { class: 'muted small' }, 'No place by that name. Try a country, a US state or a US county.'));
+    };
+    const search = h('input', { class: 'search', placeholder: 'Search a country, US state or county', oninput: () => fill(search.value) });
+    placeBox.append(search, list); fill('');
+    if (st.place) placeBox.append(h('button', { class: 'linkbtn', onclick: () => drawPlace(false) }, `Keep ${st.place.name}`));
+    if (window.innerWidth >= 760 || searching) setTimeout(() => search.focus(), 30);
   };
-  const fillParts = () => {
-    const m = curLevel(); admPart.innerHTML = '';
-    if (m && m.byState && !m.precincts) { m.parts.slice().sort((a, b) => a.title.localeCompare(b.title)).forEach((p) => admPart.append(h('option', { value: 'L:' + p.key }, `${p.title} (${p.count.toLocaleString()})`))); partRow.style.display = ''; st.adm = admPart.value; }
-    else { partRow.style.display = 'none'; st.adm = m ? `L:${m.iso}_${m.level}` : null; }
-    admInfo();
+  // other ways: the older plan types, folded away
+  const otherBox = h('div', { class: 'ucards', role: 'radiogroup' });
+  const scopeSel = h('select', { onchange: (e) => { st.otherScope = +e.target.value; setN(); autoName(); } }, h('option', { value: 0 }, 'Whole world'), [...U.countries.map((c, k) => [c.name, k + 1])].sort().map(([n, v]) => h('option', { value: v }, n)));
+  const scopeRow = h('label', null, 'Country', scopeSel);
+  const drawOther = () => {
+    otherBox.innerHTML = '';
+    for (const [u, t, d] of [['counties', 'US counties', 'All 3,221 counties nationwide'], ['provinces', 'Provinces and states', 'Of any country, or the whole world'], ['cells', 'World grid', 'Free-form squares anywhere on Earth']])
+      otherBox.append(h('button', { role: 'radio', class: st.mode === 'other' && st.other === u ? 'on' : '', onclick: () => { st.mode = 'other'; st.other = u; if (!st.otherScope && st.place) st.otherScope = st.place.ci; scopeSel.value = st.otherScope; drawAll(); } }, h('b', null, t), h('small', null, d)));
+    scopeRow.hidden = !(st.mode === 'other' && st.other !== 'counties');
   };
-  const fillLevels = () => { const iso = admCountry.value; admLevel.innerHTML = ''; lvls.filter((m) => m.iso === iso && !m.precincts).forEach((m) => admLevel.append(h('option', { value: `${m.iso}_${m.level}` }, `Level ${m.level} · ${m.levelName} (${m.count.toLocaleString()})`))); fillParts(); };
-  levelList().then((L) => {
-    lvls = L; const seen = new Map(); for (const m of L) if (!seen.has(m.iso)) seen.set(m.iso, m.title);
-    admCountry.append(...[...seen.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([iso, t]) => h('option', { value: iso, selected: iso === (app.admPreset || 'FRA') }, t))); fillLevels();
-    if (app.admPresetLevel) { admLevel.value = `${app.admPreset}_${app.admPresetLevel}`; fillParts(); if (app.admPresetPart && /^L:\w+_\d+_/.test(app.admPresetPart)) { admPart.value = app.admPresetPart; st.adm = admPart.value; admInfo(); } }
-  });
-  const admRows = h('div', { style: { display: 'none' } }, h('label', null, 'Country', admCountry), h('label', null, 'Level', admLevel), partRow, admNote);
-  const worldRows = h('div', { style: { display: 'none' } }, h('label', null, 'Country', scopeSel));
+  const drawAll = () => { drawPlace(false); drawOpts(); drawOther(); setN(); autoName(); };
   const randRow = toggle('Start with an automatic random plan', false, (v) => { st.random = v; });
-  const status = h('div', { class: 'muted small' });
-  let unitSelect = null; // this form's own unit select (cards drive it; never look it up by id — two forms can exist)
-  const f = h('div', { class: 'form' },
-    !inModal ? h('div', { class: 'hero' }, h('h3', null, 'Draw your own districts'), h('p', { class: 'muted' }, 'Choose what to build them from and how many you want, then paint them on the map.')) : null,
-    unitCards(st, () => unitSelect), h('label', { class: 'hide-sel' }, 'Build districts from', unitSelect = (() => { const sel = h('select', { onchange: (e) => { st.unit = e.target.value; pctRows.style.display = st.unit === 'precincts' ? '' : 'none'; admRows.style.display = st.unit === 'admin' ? '' : 'none'; if (st.unit === 'admin') admInfo(); else if (!st.custom) { const pk = packs && packs.find((x) => x.state === st.pack); st.name = st.unit === 'precincts' ? `${pk ? pk.title : 'Precinct'} plan` : ({ counties: 'US counties plan', provinces: 'Provinces plan', cells: 'World grid plan' })[st.unit] || st.name; nameIn.value = st.name; } worldRows.style.display = ['precincts', 'counties', 'admin'].includes(st.unit) ? 'none' : ''; if (st.unit !== 'precincts') setRealN(); } }, [['precincts', UNIT_TYPES.precincts], ['admin', 'Real local areas — any country, levels 1–5'], ['cells', UNIT_TYPES.cells], ['provinces', UNIT_TYPES.provinces], ['counties', UNIT_TYPES.counties]].map(([k, l]) => h('option', { value: k, selected: k === st.unit }, l)));
-      if (app.admPreset) setTimeout(() => { sel.value = 'admin'; sel.dispatchEvent(new Event('change')); }, 0); return sel; })()),
-    pctRows, admRows, worldRows,
-    h('label', null, 'Number of districts', nInput), realLink, seatNote, status,
-    h('details', { class: 'sec' }, h('summary', null, 'More options'), h('label', null, 'Name', nameIn), randRow),
+  const f = h('div', { class: 'form newplan' },
+    !inModal ? h('div', { class: 'hero' }, h('h3', null, 'Draw districts'), h('p', { class: 'muted' }, 'Pick a place and what to build from, then paint the districts on the map.')) : null,
+    h('div', { class: 'sec-t' }, '1 · Where'), placeBox,
+    h('div', { class: 'sec-t' }, '2 · Build from'), optBox,
+    h('div', { class: 'sec-t' }, '3 · How many districts'), nInput, realLink, seatNote, status,
+    h('details', { class: 'sec' }, h('summary', null, 'More options'), h('label', null, 'Name', nameIn), realRow, randRow),
+    h('details', { class: 'sec' }, h('summary', null, 'Other ways to build districts'), h('p', { class: 'muted small' }, 'Older plan types that cover a whole country or the world at once.'), otherBox, scopeRow),
     h('details', { class: 'sec' }, h('summary', null, 'Have a plan code?'), (() => {
       const ta = h('textarea', { rows: 3, placeholder: 'Paste a code that starts with AF1:' });
       return h('div', null, ta, h('div', { class: 'btns' },
@@ -1059,27 +1056,36 @@ function newPlanForm(inModal) {
     btn('Create plan', async (e) => {
       const button = e.currentTarget; button.disabled = true;
       try {
-        // work on copies so a failed load leaves the form as it was
-        let unit = st.unit, pack = st.pack;
-        if (unit === 'admin') { const m = curLevel(); if (!m || !st.adm) throw new Error('Pick a country and level'); const part = m.byState ? m.parts.find((p) => 'L:' + p.key === st.adm) : null; if ((part ? part.count : m.count) > 60000) throw new Error('That level has too many areas for a phone. Pick a higher level'); unit = 'precincts'; pack = st.adm; }
-        if (unit === 'precincts' && !pack) throw new Error('No map data for that state in this build');
-        if (unit === 'precincts') { status.textContent = 'Loading…'; await usePack(pack, (fr, t) => { status.textContent = t; }); }
-        const p = newPlan(W, { name: st.name || 'Plan', unit, scope: unit === 'counties' ? U.countries.findIndex((c) => c.a3 === 'USA') + 1 : st.scope, n: st.n, pack });
-        app.admPreset = null; app.admPresetLevel = null; app.admPresetPart = null;
-        // a county plan only uses that county's areas; a counties plan for a chosen state only that state's counties
-        if (st.onlyCounty && unit === 'precincts') {
-          const P = W.D.packs[pack], norm = (s) => String(s || '').toLowerCase().replace(/\b(county|parish|borough|census area|city and borough|municipality)\b/g, '').replace(/[^a-z]/g, '');
-          const names = P.countyLabels || P.countyNames || [], k = names.findIndex((x) => norm(x) === norm(st.onlyCounty));
-          if (k >= 0) p.onlyCounty = k; else toast(`Couldn't match ${st.onlyCounty} in this data, so the plan covers the whole state`, 5000);
+        let p;
+        if (st.mode === 'place') {
+          const o = st.opt; if (!st.place || !o) throw new Error('Choose a place and what to build from');
+          if (o.unit === 'precincts') { status.textContent = 'Loading…'; await usePack(o.pack, (fr, t) => { status.textContent = t; }); }
+          p = newPlan(W, { name: st.name || 'Plan', unit: o.unit, scope: o.unit === 'counties' ? usaCi : o.scope || st.place.ci, n: st.n, pack: o.pack });
+          if (o.onlyCounty && o.unit === 'precincts') {
+            const P = W.D.packs[o.pack], norm = (s) => String(s || '').toLowerCase().replace(/\b(county|parish|borough|census area|city and borough|municipality)\b/g, '').replace(/[^a-z]/g, '');
+            const names = P.countyLabels || P.countyNames || [], k = names.findIndex((x) => norm(x) === norm(o.onlyCounty));
+            if (k >= 0) p.onlyCounty = k; else toast(`Couldn't match ${o.onlyCounty} in this data, so the plan covers the whole state`, 5000);
+          }
+          if (o.onlyState) p.onlyState = o.onlyState;
+          if (o.real && st.real >= 0 && p.onlyCounty == null) applyRealPlan(W, p, st.real); else if (st.random) randomPlan(W, p);
+        } else {
+          p = newPlan(W, { name: st.name || 'Plan', unit: st.other, scope: st.other === 'counties' ? usaCi : st.otherScope, n: st.n });
+          if (st.random) randomPlan(W, p);
         }
-        if (unit === 'counties' && focusState) p.onlyState = focusState[2];
-        if (unit === 'precincts' && st.unit === 'precincts' && st.real >= 0 && p.onlyCounty == null) applyRealPlan(W, p, st.real); else if (st.random) randomPlan(W, p);
+        app.admPreset = null; app.admPresetLevel = null; app.admPresetPart = null; app.precinctPreset = null;
         app.activePlan = p.id; app.district = 0; app.tool = 'brush'; rebuildCatalog(); closeModal(); computePlanStats(); refresh(); refreshPanels();
-        if (FOCUS.cur && FOCUS.cur.bbox) setTimeout(frameFocus, 280);
-        else if (unit === 'precincts') { const b = W.D.packs[pack].bbox; app.R.fitBounds(b[0], b[1], b[2], b[3]); }
-        else if (p.scope) { const c = U.countries[p.scope - 1]; const n = W.nations[p.scope]; if (n && n.alive) zoomToNation(n); else app.R.flyTo(c.label[0], c.label[1]); }
+        // like Districtr: show only the plan's place
+        const pl = st.mode === 'place' ? st.place : null;
+        if (pl && pl.kind === 'county') focusCounty(pl.county);
+        else if (pl && pl.kind === 'state') { const pk = U.provinces.findIndex((x) => x.n === pl.name && x.c === usaCi); if (pk >= 0) focusProvince(pk); }
+        else if (pl) focusCountry(pl.ci);
+        else if (p.scope) { const n = W.nations[p.scope]; if (n && n.alive) zoomToNation(n); }
+        if (app.sheet === 'full') setSheet('half'); // make room to paint
+        setTimeout(frameFocus, 300);
       } catch (err) { status.textContent = err.message; toast(err.message, 5000); button.disabled = false; }
     }, 'primary wide sticky-cta'));
+  st.place = presetPlace(); drawAll();
+  Promise.all([packList(), levelList()]).then(([a, b]) => { packs = a; lvls = b; loaded = true; drawAll(); app.precinctPreset = null; app.admPreset = null; app.admPresetLevel = null; app.admPresetPart = null; });
   return f;
 }
 // Seats in each country's national lower house (single-seat districts where the country uses them).
@@ -1088,21 +1094,6 @@ const seatsFor = (a3) => SEATS[a3] || 0;
 const COUNTY_SEATS = 5; // most US counties elect a board of five; change it for yours
 // [FIPS, postal code, name, US House seats after the 2020 census]
 const US_STATES = [['01','AL','Alabama',7],['02','AK','Alaska',1],['04','AZ','Arizona',9],['05','AR','Arkansas',4],['06','CA','California',52],['08','CO','Colorado',8],['09','CT','Connecticut',5],['10','DE','Delaware',1],['11','DC','District of Columbia',1],['12','FL','Florida',28],['13','GA','Georgia',14],['15','HI','Hawaii',2],['16','ID','Idaho',2],['17','IL','Illinois',17],['18','IN','Indiana',9],['19','IA','Iowa',4],['20','KS','Kansas',4],['21','KY','Kentucky',6],['22','LA','Louisiana',6],['23','ME','Maine',2],['24','MD','Maryland',8],['25','MA','Massachusetts',9],['26','MI','Michigan',13],['27','MN','Minnesota',8],['28','MS','Mississippi',4],['29','MO','Missouri',8],['30','MT','Montana',2],['31','NE','Nebraska',3],['32','NV','Nevada',4],['33','NH','New Hampshire',2],['34','NJ','New Jersey',12],['35','NM','New Mexico',3],['36','NY','New York',26],['37','NC','North Carolina',14],['38','ND','North Dakota',1],['39','OH','Ohio',15],['40','OK','Oklahoma',5],['41','OR','Oregon',6],['42','PA','Pennsylvania',17],['44','RI','Rhode Island',2],['45','SC','South Carolina',7],['46','SD','South Dakota',1],['47','TN','Tennessee',9],['48','TX','Texas',38],['49','UT','Utah',4],['50','VT','Vermont',1],['51','VA','Virginia',11],['53','WA','Washington',10],['54','WV','West Virginia',2],['55','WI','Wisconsin',8],['56','WY','Wyoming',1]];
-// The unit choice as big, described options (the select stays as the source of truth).
-const UNIT_INFO = [
-  ['precincts', 'A US state', 'All 50 states: real precincts where available, otherwise 2020 voting districts, block groups or tracts'],
-  ['admin', 'Local areas anywhere', 'Any country’s regions, districts, towns or villages'],
-  ['counties', 'US counties', 'All 3,221 counties with census population'],
-  ['provinces', 'Provinces and states', 'For any country or the whole world'],
-  ['cells', 'World grid', 'Free-form squares anywhere on Earth'],
-];
-function unitCards(st, getSel) {
-  const wrap = h('div', { class: 'ucards', role: 'radiogroup', 'aria-label': 'Build districts from' });
-  const draw = () => { wrap.querySelectorAll('button').forEach((b) => { const on = b.dataset.u === st.unit; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }); };
-  for (const [u, t, d] of UNIT_INFO) wrap.append(h('button', { 'data-u': u, role: 'radio', class: st.unit === u ? 'on' : '', onclick: () => { const sel = getSel(); if (sel) { sel.value = u; sel.dispatchEvent(new Event('change')); } st.unit = u; draw(); } }, h('b', null, t), h('small', null, d)));
-  setTimeout(() => { const sel = getSel(); if (sel && sel.value === 'admin') st.unit = 'admin'; draw(); }, 10);
-  return h('div', null, h('div', { class: 'sec-t' }, 'Build districts from'), wrap);
-}
 export function startLevelPlan(iso, level, key) {
   // the plan form opens in the Districts panel itself (no second copy in a pop-up), already set to these areas
   if (key && !key.includes(':')) app.precinctPreset = key; // a precinct pack
@@ -1195,42 +1186,80 @@ function renderEdit(b) {
     b.append(h('p', { class: 'muted small' }, 'Tap anywhere on the map to unleash it.'));
   } else if (et === 'nations' || et === 'release' || et === 'capital') renderNationEditor(b);
   else if (et === 'diplomacy') renderDiplomacy(b);
-  b.append(overlaySection());
 }
-// Overlay: lay any other map see-through over the one you are editing (population over borders, say).
-function overlaySection() {
-  const O = app.overlay, t = O && app.catalog.find((x) => x.id === O.id);
-  const kids = [h('button', { class: 'pickrow', onclick: openOverlayPicker }, h('span', { class: 'sw', style: { background: t ? swatchBg(t) : 'transparent', border: t ? '' : '2px dashed var(--line2)' } }),
-    h('span', null, h('small', null, 'Map laid on top'), h('b', null, t ? t.label : 'None')), h('span', { class: 'prchg' }, t ? 'Change' : 'Add'))];
-  if (t) {
-    const out = h('b', null, Math.round(O.alpha * 100) + '%');
-    kids.push(h('label', { class: 'slider' }, 'Strength', h('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: O.alpha, oninput: (e) => { O.alpha = +e.target.value; out.textContent = Math.round(O.alpha * 100) + '%'; clearTimeout(app._ovT); app._ovT = setTimeout(refresh, 60); } }), out),
-      h('div', { class: 'btns' }, btn('Remove overlay', () => { app.overlay = null; refresh(); refreshPanels(); }, 'sm')));
-  }
-  return section('Overlay', ...kids);
-}
-function openOverlayPicker() {
+function openOverlayPicker(back) {
   rebuildCatalog();
-  const list = h('div', { class: 'tlist' });
-  const tag = { cells: '', provinces: 'regions', counties: 'US counties' };
+  const list = h('div', { class: 'tlist' }), p = app.mode === 'draw' ? plan() : null;
+  const tag = { cells: '', provinces: 'regions', counties: 'US counties', precincts: p && p.pack && p.pack.startsWith('L:') ? 'areas' : 'precincts' };
+  const pickIt = (id) => { app.overlay = id ? { id, alpha: app.overlay ? app.overlay.alpha : (app.mode === 'draw' ? 0.6 : 0.55) } : null; refresh(); refreshPanels(); if (back) back(); else closeModal(); };
   const draw = (q) => {
     list.innerHTML = ''; q = (q || '').toLowerCase().trim();
-    if (!q && app.overlay) list.append(h('button', { class: 'titem', onclick: () => { app.overlay = null; closeModal(); refresh(); refreshPanels(); } }, h('span', { class: 'swatch', style: { border: '2px dashed var(--line2)' } }), h('span', null, 'No overlay')));
+    if (!q && app.overlay) list.append(h('button', { class: 'titem', onclick: () => pickIt(null) }, h('span', { class: 'swatch', style: { border: '2px dashed var(--line2)' } }), h('span', null, 'Nothing on top')));
+    // this plan's own areas first in Districts: their votes, race and density are what Districtr shows
+    const all = app.catalog.filter((t) => overlayable(t)), first = all.filter((t) => t.layer !== 'cells'), rest = all.filter((t) => t.layer === 'cells');
     let g = null, n = 0;
-    for (const t of app.catalog) {
-      if (!overlayable(t) || t.id === 'nations') continue;
+    for (const t of [...first, ...rest]) {
       if (q && !(t.label.toLowerCase().includes(q) || t.group.toLowerCase().includes(q))) continue;
       if (++n > 400) break;
       if (t.group !== g) { g = t.group; list.append(h('div', { class: 'tgroup' }, g === 'Simulation' ? 'World' : g)); }
-      list.append(h('button', { class: 'titem' + (app.overlay && app.overlay.id === t.id ? ' on' : ''), onclick: () => { app.overlay = { id: t.id, alpha: app.overlay ? app.overlay.alpha : 0.55 }; closeModal(); refresh(); refreshPanels(); } },
-        h('span', { class: 'swatch' + (t.kind === 'cat' ? ' cat' : ''), style: { background: swatchBg(t) } }), h('span', null, t.label), h('small', null, tag[t.layer])));
+      list.append(h('button', { class: 'titem' + (app.overlay && app.overlay.id === t.id ? ' on' : ''), onclick: () => pickIt(t.id) },
+        h('span', { class: 'swatch' + (t.kind === 'cat' ? ' cat' : ''), style: { background: swatchBg(t) } }), h('span', null, t.label), h('small', null, tag[t.layer] || '')));
     }
     if (!list.children.length) list.append(h('p', { class: 'muted' }, 'No maps match.'));
   };
-  const search = h('input', { class: 'search', placeholder: 'Search maps…', oninput: () => draw(search.value) });
+  const search = h('input', { class: 'search', placeholder: 'Search data…', oninput: () => draw(search.value) });
   draw('');
-  openModal('Lay a map on top', h('div', null, h('p', { class: 'muted small' }, 'It shows see-through over the map you are editing, so you can paint borders along rivers, population or climate.'), search, list));
+  openModal('Data on top', h('div', null, back ? h('button', { class: 'linkbtn back', onclick: back }, '‹ Map options') : null,
+    h('p', { class: 'muted small' }, p ? 'Shows through your district colours, like Districtr: votes, race, population and more for these areas.' : 'Shows see-through over the map, so you can paint along rivers, population or climate.'), search, list));
 }
+// Every map setting in one place: data on top, what colours the map, map level, base map and what is drawn.
+export function openMapOptions() {
+  const body = h('div', { class: 'mapopts' });
+  const draw = () => { body.innerHTML = ''; body.append(...mapOptionSections(draw)); };
+  draw(); openModal('Map options', body);
+}
+// The sections themselves: shown in the Map options pop-up and as the Map tab's own panel.
+function mapOptionSections(redraw) {
+  const out = [], p = app.mode === 'draw' ? plan() : null, inMap = app.mode === 'explore';
+  const O = app.overlay, ot = O && app.catalog.find((x) => x.id === O.id), ok = ot && overlayable(ot);
+  // 1. data on top
+  const top = [h('button', { class: 'pickrow', onclick: () => openOverlayPicker(inMap && !$('#modal').classList.contains('hidden') ? openMapOptions : inMap ? null : openMapOptions) }, h('span', { class: 'sw', style: { background: ok ? swatchBg(ot) : 'transparent', border: ok ? '' : '2px dashed var(--line2)' } }),
+    h('span', null, h('small', null, p ? 'Data shown through your districts' : 'Data shown on top of the map'), h('b', null, ok ? ot.label : 'Nothing yet')), h('span', { class: 'prchg' }, ok ? 'Change' : 'Choose'))];
+  if (O && !ok) top.push(h('p', { class: 'muted small' }, `“${ot ? ot.label : 'That map'}” can't show here. Choose another.`));
+  if (ok) {
+    const v = h('b', null, Math.round(O.alpha * 100) + '%');
+    top.push(h('label', { class: 'slider' }, 'Strength', h('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: O.alpha, oninput: (e) => { O.alpha = +e.target.value; v.textContent = Math.round(O.alpha * 100) + '%'; clearTimeout(app._ovT); app._ovT = setTimeout(refresh, 60); } }), v),
+      h('div', { class: 'btns' }, btn('Remove', () => { app.overlay = null; refresh(); refreshPanels(); redraw(); }, 'sm')));
+  }
+  out.push(section('Data on top', ...top));
+  // 2. what colours the map
+  if (p) {
+    const D = app.drawOpts, re = () => { refresh(); refreshPanels(); };
+    out.push(section('Districts', h('div', { class: 'tog-row col' },
+      toggle('Hide district colours', D.hideDistricts, (v) => { D.hideDistricts = v; re(); }),
+      toggle('Highlight areas not in a district', D.highlightUnassigned, (v) => { D.highlightUnassigned = v; re(); }),
+      toggle('Colour districts by vote (blue ↔ red)', D.byVote, (v) => { D.byVote = v; re(); }),
+      toggle(`Show ${p.unit === 'provinces' ? 'country' : 'province / state'} boundaries`, D.boundaries, (v) => { D.boundaries = v; re(); }))));
+  } else {
+    const lvl = LV.level && inMap, ids = lvl ? levelThemesNow().map((t) => [t.id, t.label]) : [['nations', 'Nations'], ['density', 'Population'], ['c_gdppc', 'Wealth'], ['lean', 'Politics'], ['terrain', 'Terrain'], ['climate', 'Climate']];
+    out.push(section(lvl ? 'Colour areas by' : 'Colour the map by', h('div', { class: lvl ? 'lvThemes' : '' }, h('div', { class: 'chips' }, ids.map(([id, l]) => h('button', { class: 'chip-s' + (app.themeId === id ? ' on' : ''), onclick: () => { setTheme(id); redraw(); } }, l)))),
+      lvl ? null : btn(`All ${app.catalog.length.toLocaleString()} maps…`, openThemeBrowser, 'wide')));
+  }
+  // 3. map level (areas of every country): a Map tab view
+  if (inMap) out.push(levelSection());
+  else out.push(section('Map level', h('div', { class: 'seg levels' }, LEVEL_NAMES.map((l, k) => h('button', { onclick: () => { closeModal(); setMode('explore'); if (app.full) setFull(false); chooseLevel(k); } }, h('b', null, k ? k : '🌐'), h('small', null, l)))),
+    h('div', { class: 'muted small' }, 'Opens the Map tab with the real administrative areas of every country.')));
+  // 4. base map and 5. what is drawn
+  out.push(mapStyleSection(redraw));
+  out.push(section('On the map', h('div', { class: 'tog-row col' },
+    toggle('Real borders', app.show.borders, (v) => { app.show.borders = v; refresh(); }),
+    toggle('Cities', app.show.cities, (v) => { app.show.cities = v; applyMapStyle(); }),
+    toggle('Labels', app.show.labels, (v) => { app.show.labels = v; app.R.dirty(); }),
+    toggle('Roads, railways and rivers (built-in map)', app.show.roads !== false, (v) => { app.show.roads = v; applyMapStyle(); }),
+    toggle('Grid squares when zoomed in', app.show.grid, (v) => { app.show.grid = v; refresh(); }))));
+  return out;
+}
+export const openLayers = openMapOptions;
 
 function defaultValue(a) { return a === 'pop' ? 2 : a === 'dev' ? 0.8 : a === 'lean' ? 0 : a === 'terrain' ? 6 : 1; }
 function autoTheme() { const m = { dev: 'dev', pop: 'density', lean: 'lean', terrain: 'terrain' }; setTheme(m[app.dataAttr] || 'cu_' + app.dataAttr); }

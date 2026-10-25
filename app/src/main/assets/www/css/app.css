@@ -379,7 +379,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 @media (min-width: 760px) { #hint { left: calc(50% + 230px); max-width: calc(100% - 600px); } }
 .linkbtn.back { font-size: 15px; text-decoration: none; margin: 8px 0 2px; display: inline-block; }
 /* full screen: only the map, the tool bar and the hint */
-body.full #sheet, body.full #floating .fab:not(#fsBtn), body.full #attr { display: none; }
+body.full #sheet, body.full #floating .fab:not(#fsBtn):not(#layersFab), body.full #attr { display: none; }
 #fsBtn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 /* toggles inside forms keep their switch layout */
 .form label.tog, label.tog { display: inline-flex; align-items: center; gap: 8px; margin: 6px 0; color: var(--text); }
@@ -452,7 +452,7 @@ button { touch-action: manipulation; }
 .sticky-cta { position: sticky; bottom: 0; z-index: 2; box-shadow: 0 -14px 14px -2px var(--panel); }
 .dockA { justify-content: flex-start; }
 .dx.size { flex: 0 1 190px; }
-#floating.tight .fab:not(#fsBtn) { display: none; }
+#floating.tight .fab:not(#fsBtn):not(#layersFab) { display: none; }
 .titem > small:last-child { font-size: 11px; white-space: nowrap; }
 .dx.pickon { padding: 3px 4px 3px 12px; gap: 8px; font-size: 13px; color: var(--accent2); }
 .dx.pickon .ic svg { width: 18px; height: 18px; }
@@ -462,5 +462,5 @@ button { touch-action: manipulation; }
 .swatches button.on { border-color: #fff; box-shadow: 0 0 0 2px var(--panel2), 0 0 0 4px rgba(255,255,255,.5); }
 .swatches input[type=color] { width: 44px; height: 36px; }
 .pickbtn { margin: 0 0 10px; }
-body[data-mode=draw] #themeBtn { visibility: hidden; }
 [hidden] { display: none !important; }
+.themechip { max-width: 46vw; } @media (min-width: 760px) { .themechip { max-width: 420px; } }
