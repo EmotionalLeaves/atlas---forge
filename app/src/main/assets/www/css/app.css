@@ -508,3 +508,21 @@ label.mini input { width: 18px; height: 18px; margin: 0; accent-color: var(--acc
 .dchoose .titem.on .radio { border-color: var(--accent); box-shadow: inset 0 0 0 4px var(--panel), inset 0 0 0 10px var(--accent); }
 .dchoose .titem.on { color: var(--text); }
 .btn.primary:disabled { opacity: .45; }
+/* by-county brush toggle */
+.seg.mini { padding: 2px; flex: none; }
+.seg.mini button { min-height: 30px; padding: 4px 9px; font-size: 12.5px; }
+/* elections by district */
+.echips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 0 8px; }
+.echips .chip-s { flex: none; white-space: nowrap; }
+.tbl tr.on td { background: rgba(217,164,65,.10); }
+.tbl tr[onclick], .tbl tr { cursor: default; }
+.mg { display: inline-block; min-width: 46px; text-align: center; padding: 2px 6px; border-radius: 6px; color: #fff; font-size: 12px; font-weight: 700; }
+.matrix th { white-space: nowrap; font-size: 11.5px; cursor: pointer; }
+.matrix th.on { color: var(--accent2); }
+.matrix td { padding: 4px 3px; }
+.matrix tr.tot td { border-top: 2px solid var(--line2); font-size: 12px; }
+.delist { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.de { display: grid; grid-template-columns: 64px 1fr 58px; align-items: center; gap: 8px; font-size: 12.5px; }
+.de span { color: var(--muted); white-space: nowrap; }
+.de .vb { height: 8px; border-radius: 4px; background: #c8473f; overflow: hidden; display: block; }
+.de .vb em { display: block; height: 100%; background: #3f7fd6; }

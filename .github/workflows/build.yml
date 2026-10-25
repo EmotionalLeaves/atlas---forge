@@ -66,6 +66,33 @@ jobs:
           path: app/src/main/assets/www/levels
           key: ${{ steps.lvcache.outputs.cache-primary-key }}
 
+      # ---- precinct-level election results (VEST every statewide race 2016+, NYT 2024), added to the US map data ----
+      - name: Restore precinct results
+        id: preccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/afraw/prec
+          key: prec-v1-${{ hashFiles('tools/fetch-precincts.mjs') }}
+
+      - name: Download precinct results
+        if: steps.preccache.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          node --max-old-space-size=8000 tools/fetch-precincts.mjs ~/afraw/prec ~/afraw/prectmp 2>&1 | tee -a data.log
+          rm -rf ~/afraw/prectmp
+
+      - name: Save precinct results
+        if: steps.preccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/afraw/prec
+          key: ${{ steps.preccache.outputs.cache-primary-key }}
+
+      - name: Add precinct results to the maps
+        run: |
+          set -o pipefail
+          node --max-old-space-size=8000 tools/add-precinct-votes.mjs ~/afraw/prec app/src/main/assets/www/levels app/src/main/assets/www/packs 2>&1 | tail -n 400 | tee -a data.log
+
       - name: Map data summary
         run: |
           echo "levels: $(ls app/src/main/assets/www/levels | wc -l) files, $(du -sh app/src/main/assets/www/levels | cut -f1)" | tee -a data.log

@@ -257,7 +257,10 @@ const foldSheet = (t) => { if (['brush', 'erase', 'fill'].includes(t) && app.she
 function drawHead(p) {
   const coi = app.drawTab === 'coi', st = app.stats;
   const tools = coi ? [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['erase', 'eraser', 'Erase']] : [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['erase', 'eraser', 'Erase'], ['fill', 'bucket', 'Fill']];
-  const byParent = !coi && p.unit !== 'provinces' ? h('label', { class: 'mini' }, h('input', { type: 'checkbox', checked: !!app.drawOpts.parent, onchange: (e) => { app.drawOpts.parent = e.target.checked; } }), `Paint by ${PARENT_NAME_FOR(p)}`) : null;
+  // brush by single areas or by whole counties: applies to painting and erasing alike
+  const unitWord = p.unit === 'precincts' ? (planLayer(app.W, p) && planLayer(app.W, p).pack.kind === 'admin' ? 'Area' : 'Precinct') : p.unit === 'counties' ? 'County' : p.unit === 'cells' ? 'Square' : 'Area';
+  const byParent = !coi && p.unit !== 'provinces' && PARENT_NAME_FOR(p) !== unitWord.toLowerCase() ? h('div', { class: 'seg mini', role: 'group', 'aria-label': 'Brush paints' },
+    [[false, `By ${unitWord.toLowerCase()}`], [true, `By ${PARENT_NAME_FOR(p)}`]].map(([v, l]) => h('button', { class: !!app.drawOpts.parent === v ? 'on' : '', onclick: () => { app.drawOpts.parent = v; refreshPanels(); } }, l))) : null;
   let colors = null;
   if (coi) { const c = p.cois && p.cois[app.coi]; colors = h('div', { class: 'srow' }, h('span', { class: 'dot', style: { background: hex(COI_COLORS[(app.coi || 0) % COI_COLORS.length]), width: '16px', height: '16px' } }), h('b', null, c ? `Painting “${c.name}”` : 'Add a community below, then paint it')); }
   else if (st) colors = districtChips(p, st);
@@ -711,7 +714,8 @@ function renderDraw(b) {
       h('div', { class: 'dname' }, h('i'), h('b', null, `District ${app.district + 1}`), h('small', null, `of ${p.n}${p.locked[app.district] ? ' · locked' : ''}`)),
       h('button', { class: 'stepb', 'aria-label': 'Next district', onclick: () => go(app.district + 1) }, '›')),
     h('div', { class: 'kvrow' }, row('People', fmt(sel.pop)), row('Target', fmt(st.ideal))),
-    sel.units ? voteBar(sel.shares, st.parties) : h('p', { class: 'muted small' }, 'Empty. Choose Paint below and drag across the map.'),
+    sel.units ? voteBar(sel.shares, st.parties) : h('p', { class: 'muted small' }, 'Empty. Choose Paint above and drag across the map.'),
+    sel.units ? districtElections(p, st, app.district) : null,
     h('div', { class: 'btns' }, btn(p.locked[app.district] ? 'Unlock' : 'Lock', () => { p.locked[app.district] = !p.locked[app.district]; refreshPanels(); }), sel.units ? btn('Zoom to it', () => zoomToDistrict(p, app.district)) : null)));
   b.append(btn('✨ Draw fair districts for me', () => openAutoDraw(p), 'wide'));
   renderPopTab(b, p, st);
@@ -805,6 +809,47 @@ function planOptions(p) {
       h('label', null, 'Notes', h('textarea', { rows: 3, placeholder: 'What is this map for?', oninput: (e) => { p.notes = e.target.value; } }, p.notes || '')),
       p.unit !== 'precincts' ? toggle('Use this plan for elections in the simulation', p.electionsUse, (v) => { p.electionsUse = v; }) : null),
     h('div', { class: 'btns' }, btn('Delete plan', () => { if (confirm('Delete this plan?')) { W.plans = W.plans.filter((x) => x !== p); app.activePlan = W.plans.length ? W.plans[0].id : null; rebuildCatalog(); after(); } }, 'danger')));
+}
+// ---- elections, district by district ----
+const shortElection = (label) => { const y = (/(\d{4})/.exec(label) || [, ''])[1].slice(2), sp = /special/i.test(label) ? '*' : '';
+  const o = /^President/.test(label) ? 'Pres' : /^US Senate/.test(label) ? 'Sen' : /^US House/.test(label) ? 'House' : /^Governor/.test(label) ? 'Gov' : /^Lieutenant/.test(label) ? 'LtGov' : /^Attorney/.test(label) ? 'AG' : /^Secretary/.test(label) ? 'SoS' : /^Treasurer/.test(label) ? 'Treas' : /^Auditor/.test(label) ? 'Aud' : label.split(/\s+/).slice(0, 2).map((w) => w[0]).join('');
+  return `${o}${sp} '${y}`; };
+const marginText = (m) => !isFinite(m) ? '—' : Math.abs(m) < 0.0005 ? 'Tied' : `${m > 0 ? 'D' : 'R'}+${(Math.abs(m) * 100).toFixed(Math.abs(m) < 0.1 ? 1 : 0)}`;
+const marginBg = (m) => { const a = Math.min(1, Math.abs(m) / 0.4); return m > 0 ? `rgba(70,130,220,${0.18 + a * 0.6})` : `rgba(215,70,70,${0.18 + a * 0.6})`; };
+function electionsSection(p, st) {
+  const L = st.elections, cur = Math.min(Math.max(0, p.election || 0), L.length - 1), E = L[cur];
+  const pick = (k) => { p.election = k; computePlanStats(); refresh(); refreshPanels(); };
+  const chips = h('div', { class: 'echips' }, L.map((e, k) => h('button', { class: 'chip-s' + (k === cur ? ' on' : ''), title: e.label, onclick: () => pick(k) }, shortElection(e.label))));
+  const sum = h('div', { class: 'card slim' },
+    h('b', null, E.label), E.src ? h('small', { class: 'muted' }, ` · ${E.src === 'VEST' ? 'precinct results (VEST)' : E.src === 'NYT' ? 'precinct results (New York Times)' : E.src}`) : /estimated/.test(E.label) ? h('small', { class: 'muted' }, ' · county results spread by voting-age population') : h('small', { class: 'muted' }, ' · precinct results'),
+    h('div', { class: 'grid2' },
+      row('Statewide', marginText(E.dShare * 2 - 1)), row('Seats', `${E.seatsD} D · ${E.seatsR} R`),
+      row('Dem votes', fmt(E.D)), row('Rep votes', fmt(E.R)),
+      row('Efficiency gap', Math.abs(E.eg) < 0.02 ? 'balanced' : `${(Math.abs(E.eg) * 100).toFixed(1)}% to ${E.eg > 0 ? 'Rep' : 'Dem'}`), row('Mean − median', `${(E.meanMedian * 100).toFixed(1)}%`),
+      row('Competitive (±10)', String(E.competitive)), row('Other votes', fmt(E.O))));
+  const rows = E.rows.filter((x) => x.t > 0);
+  const tbl = h('table', { class: 'tbl' }, h('tr', null, ['#', 'Dem', 'Rep', 'Other', 'Dem %', 'Rep %', 'Margin'].map((x) => h('th', null, x))),
+    rows.map((x) => h('tr', { class: x.k === app.district ? 'on' : '', onclick: () => { app.district = x.k; zoomToDistrict(p, x.k); refreshPanels(); } },
+      h('td', null, h('span', { class: 'dot', style: { background: hex(p.colors[x.k]) } }), x.k + 1), h('td', null, fmt(x.d)), h('td', null, fmt(x.r)), h('td', null, fmt(x.o)),
+      h('td', null, pct(x.dPct, 1)), h('td', null, pct(x.rPct, 1)), h('td', null, h('b', { class: 'mg', style: { background: marginBg(x.margin) } }, marginText(x.margin))))));
+  // every election at once: one column per race, one row per district
+  const used = st.districts.filter((d) => d.units).map((d) => d.k);
+  const matrix = h('table', { class: 'tbl matrix' }, h('tr', null, h('th', null, '#'), L.map((e, k) => h('th', { title: e.label, class: k === cur ? 'on' : '', onclick: () => pick(k) }, shortElection(e.label)))),
+    used.map((d) => h('tr', { class: d === app.district ? 'on' : '' }, h('td', null, h('span', { class: 'dot', style: { background: hex(p.colors[d]) } }), d + 1),
+      L.map((e) => { const x = e.rows[d]; return h('td', null, x && x.t ? h('b', { class: 'mg', style: { background: marginBg(x.margin) } }, marginText(x.margin)) : '—'); }))),
+    h('tr', { class: 'tot' }, h('td', null, 'All'), L.map((e) => h('td', null, h('b', null, `${e.seatsD}–${e.seatsR}`)))));
+  return h('div', null,
+    h('div', { class: 'sec-t' }, `Elections by district (${L.length} races)`), chips, sum,
+    rows.length ? h('div', { class: 'scrollx' }, tbl) : h('p', { class: 'muted small' }, 'Paint some districts to see their results.'),
+    rows.length ? h('details', { class: 'sec', open: true }, h('summary', null, 'Every race, every district'), h('p', { class: 'muted small' }, 'Margin of each district in each race; the bottom row is seats won (Dem–Rep). Tap a race to look at it.'), h('div', { class: 'scrollx' }, matrix)) : null);
+}
+// The district card's own results: how this district voted in every race.
+function districtElections(p, st, d) {
+  const L = st.elections; if (!L || !L.length) return null;
+  const list = h('div', { class: 'delist' });
+  for (const e of L.slice(0, 40)) { const x = e.rows[d]; if (!x || !x.t) continue; const dp = x.d / (x.d + x.r || 1);
+    list.append(h('div', { class: 'de' }, h('span', { title: e.label }, shortElection(e.label)), h('i', { class: 'vb' }, h('em', { style: { width: (dp * 100) + '%' } })), h('b', { class: 'mg', style: { background: marginBg(x.margin) } }, marginText(x.margin)))); }
+  return list.children.length ? h('details', { class: 'sec' }, h('summary', null, `How District ${d + 1} voted (${list.children.length} races)`), list) : null;
 }
 // One line: how much is left to do and how balanced the map is.
 function planSummary(p, st) {
@@ -914,7 +959,6 @@ function renderEvalTab(b, p, st) {
     check(sp.split <= p.n, `${(w => w[0].toUpperCase() + w.slice(1))(parentWord(app.W, p, false))} splits`, `${sp.split} of ${sp.parents} split`),
     row('Compactness (Polsby-Popper)', pps.length ? `avg ${(pps.reduce((a, c) => a + c, 0) / pps.length).toFixed(2)} · min ${Math.min(...pps).toFixed(2)}` : '—')));
   if (p.cois && p.cois.length) { const R = coiReport(app.W, p).filter((x) => x.units); if (R.length) b.append(h('div', { class: 'card slim' }, check(R.every((x) => x.whole), 'Places kept whole', `${R.filter((x) => x.whole).length} of ${R.length}`))); }
-  if (p.unit === 'precincts') b.append(electionPicker(p));
   if (st.raceLabels && st.raceLabels.length) {
     const tot = st.districts.reduce((a, d) => a + d.pop, 0) || 1;
     const PK = p.unit === 'precincts' && planLayer(app.W, p) ? planLayer(app.W, p).pack : null;
@@ -923,14 +967,8 @@ function renderEvalTab(b, p, st) {
       st.districts.filter((d) => d.units).map((d) => h('tr', null, h('td', null, h('span', { class: 'dot', style: { background: hex(p.colors[d.k]) } }), d.k + 1),
         ...st.raceLabels.map((_, k) => { const v = d.pop ? d.race[k] / d.pop : 0; return h('td', { class: v >= 0.5 && k > 0 ? 'maj' : '' }, pct(v)); })))))));
   }
-  if (st.contested) {
-    const N = st.partyNames, rowsV = st.districts.filter((d) => d.units).map((d) => { const t = d.votes[0] + d.votes[1] + d.votes[2] || 1; return { k: d.k, a: d.votes[0] / t, b: d.votes[2] / t }; });
-    b.append(section(`Votes by district${st.election ? ' · ' + st.election : ''}`, h('div', { class: 'scrollx' }, h('table', { class: 'tbl' },
-      h('tr', null, h('th', null, '#'), h('th', null, N[0] + ' %'), h('th', null, N[2] + ' %'), h('th', null, 'Margin')),
-      rowsV.sort((x, y) => (y.a - y.b) - (x.a - x.b)).map((r) => h('tr', { onclick: () => { app.district = r.k; zoomToDistrict(p, r.k); } }, h('td', null, h('span', { class: 'dot', style: { background: hex(p.colors[r.k]) } }), r.k + 1),
-        h('td', null, pct(r.a, 1)), h('td', null, pct(r.b, 1)), h('td', null, h('b', { style: { color: hex(pcol(st, r.a >= r.b ? 0 : 2)) } }, `${r.a >= r.b ? st.partyShort[0] : st.partyShort[2]} +${Math.round(Math.abs(r.a - r.b) * 100)}`))))))));
-  }
-  if (st.contested) b.append(h('div', { class: 'card slim' }, h('div', { class: 'kv' }, h('span', null, 'Seats'), h('span', { class: 'seats' }, st.seats.map((n, k) => (n || k !== 1) ? h('b', { style: { color: hex(pcol(st, k)) } }, `${n} ${st.partyShort[k]}`) : null))), fairness(st, false)));
+  if (st.elections && st.elections.length) b.append(electionsSection(p, st));
+  else if (st.contested) b.append(h('div', { class: 'card slim' }, h('div', { class: 'kv' }, h('span', null, 'Seats'), h('span', { class: 'seats' }, st.seats.map((n, k) => (n || k !== 1) ? h('b', { style: { color: hex(pcol(st, k)) } }, `${n} ${st.partyShort[k]}`) : null))), fairness(st, false)));
   b.append(h('div', { class: 'btns' }, btn('Full table', openStats), btn('Export CSV', () => exportPlanCSV(p)), btn('Export report', () => exportReport(p, st, sp))));
 }
 function exportReport(p, st, sp) {

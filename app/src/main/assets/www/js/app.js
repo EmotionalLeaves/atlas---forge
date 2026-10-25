@@ -676,7 +676,7 @@ function strokeMove(px, py) {
     if (rad > 0) for (let r = rad / 2; r <= rad; r += rad / 2) for (let a = 0; a < 12; a++) offs.push([Math.cos(a * Math.PI / 6) * r, Math.sin(a * Math.PI / 6) * r]);
     for (const [x, y] of pts) for (const [ox, oy] of offs) { const [wx, wy] = app.R.screenToWorld(x + ox, y + oy); const u = pickUnit(p.unit, wx, wy); if (u >= 0) list.push(u); }
     if (!list.length) return;
-    const all = app.drawOpts.parent && app.tool !== 'erase' && stroke.tgt === 'plan' ? [...new Set(list.flatMap((u) => parentUnits(W, p, u)))] : list;
+    const all = app.drawOpts.parent && stroke.tgt === 'plan' ? [...new Set(list.flatMap((u) => parentUnits(W, p, u)))] : list; // by county: paints and erases whole counties
     if (stroke.tgt === 'coi') paintCoi(W, p, all, app.tool === 'erase' ? -1 : app.coi, stroke.changes);
     else paintUnits(W, p, all, app.tool === 'erase' ? -1 : app.district, stroke.changes, app.drawOpts.noOverwrite);
     const arr = app.unitRGBA[p.unit]; overlayPlanUnits(p, arr, all); app.R.setPolyColors(p.unit, arr); scheduleOutlines(p); scheduleStats();
@@ -688,7 +688,7 @@ function strokeMove(px, py) {
   if (!list.length) return;
   if (stroke.tgt === 'coi') paintCoi(W, p, list, app.tool === 'erase' ? -1 : app.coi, stroke.changes);
   else if (stroke.tgt === 'plan') {
-    if (app.drawOpts.parent && app.tool !== 'erase') { const done = stroke.parents || (stroke.parents = new Set()); const more = []; for (const i of list) { const pr = W.D.cells.admin1[i]; if (pr && !done.has(pr)) { done.add(pr); more.push(...parentUnits(W, p, i, app.provCells)); } } list = list.concat(more); }
+    if (app.drawOpts.parent) { const done = stroke.parents || (stroke.parents = new Set()); const more = []; for (const i of list) { const pr = W.D.cells.admin1[i]; if (pr && !done.has(pr)) { done.add(pr); more.push(...parentUnits(W, p, i, app.provCells)); } } list = list.concat(more); }
     paintUnits(W, p, list, app.tool === 'erase' ? -1 : app.district, stroke.changes, app.drawOpts.noOverwrite); scheduleStats();
   }
   else if (stroke.tgt === 'borders') {
@@ -736,7 +736,7 @@ function firstTip(tgt) {
   const TIPS = {
     borders: () => { const n = app.W.nations[app.paintNation]; return `Painted land for ${n && n.alive ? n.name : 'nobody'}. Undo is just above the tool bar; Move or two fingers moves the map.`; },
     data: () => 'Painted new values. Undo is just above the tool bar; Move or two fingers moves the map.',
-    plan: () => `Painted into district ${app.district + 1}. Tap the circle at the right of the bar to switch district.`,
+    plan: () => app.tool === 'erase' ? 'Erased. Undo is next to the tools; By county erases whole counties.' : `Painted into district ${app.district + 1}. Tap a colour in the bar to switch district, or By county to paint whole counties.`,
   };
   if (!TIPS[tgt]) return;
   try { const k = 'af_tip_' + tgt; if (localStorage.getItem(k)) return; localStorage.setItem(k, '1'); } catch { return; }

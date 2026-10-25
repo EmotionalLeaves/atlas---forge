@@ -89,6 +89,9 @@ export function planStats(W, p) {
   const LY = planLayer(W, p), units = LY ? LY.units : null, adjL = LY ? LY.adj : null;
   const E = precinctVotes(W, p), PK = LY && LY.pack;
   const nRace = PK ? PK.race.length : 0;
+  // every election in the data, summed per district (Dem, other, Rep), for the by-district results tables
+  const ALL = E && PK && PK.elections.length ? PK.elections.map((e) => ({ E: e, byD: null })) : null;
+  if (ALL) { const buf = new Float64Array(ALL.length * n * 3); ALL.forEach((X, e) => { X.byD = buf; X.e = e; }); }
   const res = Array.from({ length: n }, (_, k) => ({ k, pop: 0, area: 0, perim: 0, units: 0, pieces: 0, votes: [0, 0, 0], leanSum: 0, race: new Float64Array(nRace), vap: 0 }));
   let totalElig = 0, unassignedPop = 0, unassignedUnits = 0;
   const nation = !E && W.nations[p.scope] && W.nations[p.scope].alive ? W.nations[p.scope] : null;
@@ -102,7 +105,8 @@ export function planStats(W, p) {
     if (d >= n) { A[u] = -1; d = -1; }
     if (d < 0) { unassignedPop += pop; unassignedUnits++; continue; }
     const R = res[d]; R.pop += pop; R.units++;
-    if (E) { R.votes[0] += E.d[u]; R.votes[2] += E.r[u]; } else cellVote(leans[u], parties, ruling, stab, R.votes, pop);
+    if (E) { R.votes[0] += E.d[u]; R.votes[2] += E.r[u]; if (E.o) R.votes[1] += E.o[u]; } else cellVote(leans[u], parties, ruling, stab, R.votes, pop);
+    if (ALL) for (let e = 0; e < ALL.length; e++) { const X = ALL[e], o = (e * n + d) * 3; X.byD[o] += X.E.d[u]; X.byD[o + 2] += X.E.r[u]; if (X.E.o) X.byD[o + 1] += X.E.o[u]; }
     if (PK) { for (let k = 0; k < nRace; k++) R.race[k] += PK.race[k].data[u]; if (PK.vap) R.vap += PK.vap[u]; }
     if (p.unit === 'cells') {
       const row = (u / W.Wd) | 0; R.area += W.area[row];
@@ -153,9 +157,27 @@ export function planStats(W, p) {
   return { districts: res, ideal, totalPop: totalElig, unassignedPop, unassignedUnits, seats, maxDev: devs.length ? Math.max(...devs) : 0, parties,
     partyColors: E ? PRECINCT_COLORS : null, partyShort: E ? ['D', 'O', 'R'] : ['L', 'C', 'R'], partyNames: E ? ['Dem', 'Other', 'Rep'] : ['Left', 'Centre', 'Right'],
     election: E ? E.label : null, raceLabels: PK ? PK.race.map((r) => r.label) : null,
+    elections: ALL ? electionSummaries(ALL, n) : null,
     voteShare: V.map((v) => v / VT), eg, meanMedian: median - mean, competitive, contested };
 }
 
+// Per election: each district's Dem / other / Rep votes, its winner and margin, and the plan-wide fairness numbers.
+function electionSummaries(ALL, n) {
+  const buf = ALL[0].byD;
+  return ALL.map((X, e) => {
+    const rows = []; let D = 0, O = 0, R = 0, wD = 0, wR = 0, seatsD = 0, seatsR = 0; const share = [];
+    for (let k = 0; k < n; k++) {
+      const o = (e * n + k) * 3, d = buf[o], ot = buf[o + 1], r = buf[o + 2], t = d + ot + r;
+      rows.push({ k, d, o: ot, r, t, dPct: t ? d / t : 0, rPct: t ? r / t : 0, margin: d + r ? (d - r) / (d + r) : 0 });
+      if (!(d + r)) continue; D += d; O += ot; R += r;
+      const need = (d + r) / 2; if (d > r) { seatsD++; wD += d - need; wR += r; } else { seatsR++; wR += r - need; wD += d; }
+      share.push(d / (d + r));
+    }
+    share.sort((a, b) => a - b);
+    const mean = share.length ? share.reduce((a, b) => a + b, 0) / share.length : 0.5, median = share.length ? (share.length % 2 ? share[(share.length - 1) >> 1] : (share[share.length / 2 - 1] + share[share.length / 2]) / 2) : 0.5;
+    return { key: X.E.key, label: X.E.label, src: X.E.src, rows, D, O, R, seatsD, seatsR, dShare: D + R ? D / (D + R) : 0, eg: D + R ? (wD - wR) / (D + R) : 0, meanMedian: median - mean, competitive: rows.filter((x) => x.d + x.r && Math.abs(x.margin) < 0.1).length };
+  });
+}
 // Votes per district for a nation's election (used by the sim).
 export function districtVotes(W, p, nation) {
   const s = planStats(W, p); return s.districts.map((d) => d.votes);

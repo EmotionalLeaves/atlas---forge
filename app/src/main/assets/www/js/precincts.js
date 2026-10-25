@@ -34,7 +34,7 @@ export function parsePack(raw) {
     state: H.state, title: H.title, kind: H.kind || 'precincts', iso: H.iso, level: H.level, levelName: H.levelName, count: n, bbox: H.bbox, source: H.source,
     pop: get(H.pop), vap: get(H.vap),
     race: H.race.map((r) => ({ label: r.label, data: get(r.data) })), vrace: H.vrace.map((r) => ({ label: r.label, data: get(r.data) })),
-    elections: H.elections.map((e) => ({ key: e.key, label: e.label, d: get(e.d), r: get(e.r) })),
+    elections: H.elections.map((e) => ({ key: e.key, label: e.label, src: e.src || null, d: get(e.d), r: get(e.r), o: e.o ? get(e.o) : null })),
     plans: H.plans.map((p) => ({ key: p.key, label: p.label, n: p.n, assign: get(p.assign) })),
     county: get(H.county), countyNames: H.countyNames, stateFips: H.stateFips || '', names: H.names, ids: H.ids,
     area: get(H.area), perim: get(H.perim),
