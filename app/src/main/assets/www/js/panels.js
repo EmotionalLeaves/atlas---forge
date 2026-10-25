@@ -56,6 +56,24 @@ export function init() {
   document.addEventListener('pointerdown', (e) => { if (uiTarget(e)) app.uiPressing = true; }, true);
   const lift = () => { if (!app.uiPressing) return; setTimeout(() => { app.uiPressing = false; if (app.refreshPending) { app.refreshPending = false; refreshPanels(); } }, 60); };
   document.addEventListener('pointerup', lift, true); document.addEventListener('pointercancel', lift, true);
+  // Buttons on the fixed bars act on finger-up, not on the browser's later "click": a click is dropped when
+  // the finger wobbles a little or the page is busy, which is what made the Districts tab need several taps.
+  // The browser's own click that follows is swallowed so nothing fires twice (or lands on a new modal).
+  const FAST = '#tabs button, #dock button, #floating button, #top button';
+  let downBtn = null, lastFast = null;
+  document.addEventListener('pointerdown', (e) => { downBtn = (e.isPrimary && e.button <= 0 && e.target.closest && e.target.closest(FAST)) || null; }, true);
+  document.addEventListener('pointercancel', () => { downBtn = null; }, true);
+  document.addEventListener('pointerup', (e) => {
+    const b = downBtn; downBtn = null; if (!b || b.disabled || !b.isConnected || !e.isPrimary) return;
+    const r = b.getBoundingClientRect(), m = 20;
+    if (e.clientX < r.left - m || e.clientX > r.right + m || e.clientY < r.top - m || e.clientY > r.bottom + m) return;
+    lastFast = { t: performance.now(), x: e.clientX, y: e.clientY };
+    b.click();
+  }, true);
+  document.addEventListener('click', (e) => {
+    if (!e.isTrusted || !lastFast) return;
+    if (performance.now() - lastFast.t < 700 && Math.abs(e.clientX - lastFast.x) < 40 && Math.abs(e.clientY - lastFast.y) < 40) { lastFast = null; e.stopPropagation(); e.preventDefault(); }
+  }, true);
   const tabs = $('#tabs');
   for (const [m, label, ic] of [['explore', 'Map', 'explore'], ['draw', 'Districts', 'draw'], ['edit', 'Edit', 'edit']] /* History (world simulation) is switched off for now */) {
     tabs.append(h('button', { 'data-mode': m, onclick: () => setMode(m) }, icon(ic), h('span', null, label)));
@@ -146,10 +164,19 @@ export function setMode(m) {
   document.body.dataset.mode = m;
   if (app.sheet === 'peek' && (m === 'draw' || m === 'edit')) setSheet('half');
   if (m !== 'explore' && app.themeId.startsWith('lv_')) app.themeId = 'nations'; // map-level colourings belong to the Map tab
-  try { if (m === 'draw') { computePlanStats(); ensurePlanPack(); } refresh(); } catch (e) { console.error(e); }
+  try { if (m === 'draw') computePlanStats(); } catch (e) { console.error(e); }
+  // the tab and the panel change at once; recolouring the map (GPU uploads that can take a moment on a
+  // phone) happens on the next frame, so a tap always gets an immediate answer
   app.uiPressing = false; refreshPanels();
-  if (FOCUS.cur && m !== app._lastFramedMode) { app._lastFramedMode = m; setTimeout(frameFocus, 280); }
+  app._modeJob = m;
+  requestAnimationFrame(() => setTimeout(() => {
+    if (app._modeJob !== m) return; app._modeJob = null;
+    try { if (app.mode === 'draw') ensurePlanPack(); refresh(); } catch (e) { console.error(e); }
+    if (app.mode === 'explore') { safeLegend(); }
+    if (FOCUS.cur && app.mode !== app._lastFramedMode) { app._lastFramedMode = app.mode; setTimeout(frameFocus, 220); }
+  }, 0));
 }
+function safeLegend() { try { mapLegend(); softExplore(); } catch (e) { console.error(e); } }
 
 export const dateLabel = () => app.histOwner ? `Borders of ${app.W.startYear + Math.floor(app.histMonth / 12)}` : dateOf(app.W.month, app.W.startYear);
 export function toast(text, ms = 2600) {

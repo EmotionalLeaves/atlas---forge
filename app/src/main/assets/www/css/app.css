@@ -400,3 +400,8 @@ body.full #dock { bottom: calc(14px + env(safe-area-inset-bottom)) !important; }
   .undo2 button { width: 32px; } .stepper button { width: 30px; }
 }
 .places .titem > span:first-child { flex: 1; min-width: 0; }
+/* taps on the fixed bars: no pan gesture can steal them, and the press shows straight away */
+#tabs, #tabs button, #floating .fab, #top button, #dock .seal, #dock .undo2 button, #dock .stepper button { touch-action: none; }
+button { touch-action: manipulation; }
+#tabs button:active { background: rgba(217,164,65,.10); }
+#tabs button:active .ic, #dock button:active, #top button:active { transform: scale(.94); }

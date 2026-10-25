@@ -123,19 +123,33 @@ export class MapRenderer {
     this.rasterBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.rasterBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.STATIC_DRAW); this.rasterCount = v.length / 4;
   }
-  setCellColors(rgba) { const gl = this.gl; gl.bindTexture(gl.TEXTURE_2D, this.texColor); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gw, this.gh, gl.RGBA, gl.UNSIGNED_BYTE, rgba); this.dirty(); }
+  // Skip an upload when the data is identical to what the GPU already has: a full texture upload can stall
+  // a phone GPU for a while, and most mode switches don't actually change the colours.
+  _same(k, a) {
+    const C = this._up || (this._up = {}); let c = C[k];
+    if (c && c.length === a.length) {
+      const al = !(a.byteOffset & 3) && !(a.length & 3);
+      if (al) { const x = new Uint32Array(c.buffer, 0, c.length >> 2), y = new Uint32Array(a.buffer, a.byteOffset, a.length >> 2); let i = 0; const n = x.length; while (i < n && x[i] === y[i]) i++; if (i === n) return true; }
+      else { let i = 0; const n = a.length; while (i < n && c[i] === a[i]) i++; if (i === n) return true; }
+      c.set(a); return false;
+    }
+    C[k] = Uint8Array.from(a); return false;
+  }
+  setCellColors(rgba) { if (this._same('cellC', rgba)) return; const gl = this.gl; gl.bindTexture(gl.TEXTURE_2D, this.texColor); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gw, this.gh, gl.RGBA, gl.UNSIGNED_BYTE, rgba); this.dirty(); }
   // upload only rows y0..y1 of both textures (fast path while painting)
   setCellRows(colors, groups, y0, y1) {
     const gl = this.gl, w = this.gw, a = y0 * w * 4, b = (y1 + 1) * w * 4;
+    if (this._up) { if (this._up.cellC) this._up.cellC.set(colors.subarray(a, b), a); if (this._up.cellG) this._up.cellG.set(groups.subarray(a, b), a); }
     gl.bindTexture(gl.TEXTURE_2D, this.texColor); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, y0, w, y1 - y0 + 1, gl.RGBA, gl.UNSIGNED_BYTE, colors.subarray(a, b));
     gl.bindTexture(gl.TEXTURE_2D, this.texGroup); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, y0, w, y1 - y0 + 1, gl.RGBA, gl.UNSIGNED_BYTE, groups.subarray(a, b));
     this.dirty();
   }
-  setCellGroups(rgba) { const gl = this.gl; gl.bindTexture(gl.TEXTURE_2D, this.texGroup); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gw, this.gh, gl.RGBA, gl.UNSIGNED_BYTE, rgba); this.dirty(); }
+  setCellGroups(rgba) { if (this._same('cellG', rgba)) return; const gl = this.gl; gl.bindTexture(gl.TEXTURE_2D, this.texGroup); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gw, this.gh, gl.RGBA, gl.UNSIGNED_BYTE, rgba); this.dirty(); }
 
   // geom: {pos Float32Array, uid Uint16Array, idx Uint32Array, lpos Float32Array, luid Uint16Array}
   // share: reuse another layer's geometry buffers (same shapes, different colours). lineColors: per-unit outline colours.
   addPolyLayer(name, geom, { share = null, lineColors = false } = {}) {
+    if (this._up) { delete this._up['pc:' + name]; delete this._up['pl:' + name]; }
     const gl = this.gl; const L = { geom, visible: false, alpha: 0.9, lineColor: [0.05, 0.05, 0.08, 0.55], lineAlpha: 1 };
     const S = share ? this.polys[share] : null;
     if (S) { L.pos = S.pos; L.idx = S.idx; L.lbuf = S.lbuf; L.n = S.n; L.ln = S.ln; }
@@ -169,6 +183,7 @@ export class MapRenderer {
   }
   setPolyColors(name, unitRGBA, lineRGBA) { // Uint8Array(4*units) each
     const L = this.polys[name], uid = L.geom.uid, c = L.colData, gl = this.gl;
+    if (this._same('pc:' + name, unitRGBA) & (!lineRGBA || !L.lcol || this._same('pl:' + name, lineRGBA))) return;
     for (let i = 0; i < uid.length; i++) { const u = uid[i] * 4, o = i * 4; c[o] = unitRGBA[u]; c[o + 1] = unitRGBA[u + 1]; c[o + 2] = unitRGBA[u + 2]; c[o + 3] = unitRGBA[u + 3]; }
     gl.bindBuffer(gl.ARRAY_BUFFER, L.col); gl.bufferSubData(gl.ARRAY_BUFFER, 0, c);
     if (lineRGBA && L.lcol) {
