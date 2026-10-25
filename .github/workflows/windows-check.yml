@@ -32,11 +32,18 @@ jobs:
           "./dist/win-unpacked/Atlas Forge.exe" --smoke || echo "app exited with $?"
           cat smoke.txt | tee -a build-win.log
           grep -q '"ok": true' smoke.txt
+      - name: Screenshots
+        working-directory: desktop
+        shell: bash
+        run: |
+          npx electron shots.js || echo "shots exited $?"
+          ls -la shots
       - name: Keep the log
         if: always()
         shell: bash
         run: |
           mkdir -p /tmp/ciw && (cp desktop/build-win.log /tmp/ciw/build-win.log 2>/dev/null || echo "no log" > /tmp/ciw/build-win.log)
+          cp desktop/shots/*.png /tmp/ciw/ 2>/dev/null || true
           echo "${{ job.status }}" > /tmp/ciw/status.txt
           cd /tmp/ciw && git init -q && git checkout -q -b ci-log-wincheck
           git config user.name "ci" && git config user.email "ci@users.noreply.github.com"
