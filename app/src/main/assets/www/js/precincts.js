@@ -30,7 +30,7 @@ export function parsePack(raw) {
   const get = (ref) => ref ? new TYPES[ref.t](data, ref.o, ref.n) : null;
   const n = H.count, [ox, oy] = H.origin;
   const P = {
-    state: H.state, title: H.title, count: n, bbox: H.bbox, source: H.source,
+    state: H.state, title: H.title, kind: H.kind || 'precincts', iso: H.iso, level: H.level, levelName: H.levelName, count: n, bbox: H.bbox, source: H.source,
     pop: get(H.pop), vap: get(H.vap),
     race: H.race.map((r) => ({ label: r.label, data: get(r.data) })), vrace: H.vrace.map((r) => ({ label: r.label, data: get(r.data) })),
     elections: H.elections.map((e) => ({ key: e.key, label: e.label, d: get(e.d), r: get(e.r) })),
@@ -49,38 +49,78 @@ export function parsePack(raw) {
   const A = get(H.adj), AL = get(H.adjLen); P.adj = Array.from({ length: n }, () => []);
   for (let k = 0; k < A.length; k += 2) { const a = A[k], b = A[k + 1], L = AL[k / 2]; P.adj[a].push(b, L); P.adj[b].push(a, L); }
   // units look like provinces/counties to the rest of the app
-  P.units = Array.from({ length: n }, (_, u) => ({ n: P.names[u] || `Precinct ${P.ids[u] || u + 1}`, pop: P.pop[u], area: P.area[u], perim: P.perim[u] }));
+  P.units = Array.from({ length: n }, (_, u) => ({ n: P.names[u] || `${P.kind === 'admin' ? 'Area' : 'Precinct'} ${P.ids[u] || u + 1}`, pop: P.pop[u], area: P.area[u], perim: P.perim[u] }));
   return P;
 }
 
-const loaded = new Map();
-// Returns the parsed pack, downloading it if needed. progress(fraction, text)
-export async function loadPack(state, progress = () => {}) {
-  if (loaded.has(state)) return loaded.get(state);
-  let raw = null;
-  try { raw = await getPack(state); } catch {}
-  if (!raw) {
-    const srcs = (window.PACK_SOURCES_OVERRIDE || PACK_SOURCES);
-    let lastErr = null;
-    for (const base of srcs) {
-      try {
-        const res = await fetch(base + state + '.afp.gz', { cache: 'no-cache' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const total = +res.headers.get('content-length') || 0;
-        if (res.body && res.body.getReader) {
-          const rd = res.body.getReader(), parts = []; let got = 0;
-          for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; progress(total ? got / total : 0, `Downloading ${state} precincts… ${(got / 1048576).toFixed(1)} MB`); }
-          raw = await new Blob(parts).arrayBuffer();
-        } else raw = await res.arrayBuffer();
-        break;
-      } catch (e) { lastErr = e; }
-    }
-    if (!raw) throw new Error(`Couldn't download the ${state} precincts (${lastErr ? lastErr.message : 'offline'}). Check your internet connection.`);
-    try { await putPack(state, raw); } catch {}
+// ---- manifests ----
+let levelsMf = null, usMf = null;
+export async function levelList() { if (levelsMf) return levelsMf; try { levelsMf = await (await fetch('levels/levels.json')).json(); } catch { levelsMf = []; } return levelsMf; }
+export async function usList() { if (usMf) return usMf; try { usMf = await (await fetch('us/us.json')).json(); } catch { usMf = []; } return usMf; }
+
+// key formats: 'PA' (precincts), 'L:FRA_2' (admin level, may have parts), 'T:42' (US tracts), 'B:42' (US block groups)
+export function packPath(key) {
+  if (key.startsWith('L:')) return 'levels/' + key.slice(2) + '.afp.gz';
+  if (key.startsWith('T:')) return 'us/tract_' + key.slice(2) + '.afp.gz';
+  if (key.startsWith('B:')) return 'us/bg_' + key.slice(2) + '.afp.gz';
+  return 'packs/' + key + '.afp.gz';
+}
+async function fetchRaw(rel, progress, label) {
+  const res = await fetch(rel); if (!res.ok) throw new Error('HTTP ' + res.status);
+  const total = +res.headers.get('content-length') || 0;
+  if (!res.body || !res.body.getReader) return res.arrayBuffer();
+  const rd = res.body.getReader(), parts = []; let got = 0;
+  for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; if (total > 2e6) progress(got / total, `${label}… ${(got / 1048576).toFixed(1)} MB`); }
+  return new Blob(parts).arrayBuffer();
+}
+// Load one pack file (no caching) — used directly by the level view.
+export async function readPack(key, progress = () => {}) {
+  const rel = packPath(key);
+  let raw = null, lastErr = null;
+  const srcs = key.includes(':') ? [''] : (window.PACK_SOURCES_OVERRIDE || PACK_SOURCES).map((b) => b === 'packs/' ? '' : b);
+  for (const base of srcs) {
+    try { raw = await fetchRaw(base ? base + key + '.afp.gz' : rel, progress, `Loading ${key}`); break; } catch (e) { lastErr = e; }
   }
-  progress(1, 'Unpacking…');
-  const P = parsePack(await gunzip(raw));
-  loaded.set(state, P);
+  if (!raw) { try { raw = await getPack(key); } catch {} }
+  if (!raw) throw new Error(`Couldn't load ${key} (${lastErr ? lastErr.message : 'missing'})`);
+  const P = parsePack(await gunzip(raw)); P.key = key; return P;
+}
+// Join the parts of a split level into one pack (ids become 32-bit if needed).
+export function mergePacks(list, key) {
+  if (list.length === 1) { list[0].key = key; return list[0]; }
+  const n = list.reduce((s2, P) => s2 + P.count, 0), big = n > 65535;
+  const cat = (f, T) => { const out = new T(list.reduce((s2, P) => s2 + f(P).length, 0)); let o = 0; for (const P of list) { out.set(f(P), o); o += f(P).length; } return out; };
+  let uo = 0, vo = 0; const uid = new (big ? Uint32Array : Uint16Array)(list.reduce((s2, P) => s2 + P.geom.uid.length, 0)), luid = new (big ? Uint32Array : Uint16Array)(list.reduce((s2, P) => s2 + P.geom.luid.length, 0)), lnb = new (big ? Uint32Array : Uint16Array)(luid.length), idx = new Uint32Array(list.reduce((s2, P) => s2 + P.geom.idx.length, 0));
+  let a = 0, b = 0, c = 0; const adj = [];
+  for (const P of list) {
+    for (let i = 0; i < P.geom.uid.length; i++) uid[a + i] = P.geom.uid[i] + uo;
+    for (let i = 0; i < P.geom.idx.length; i++) idx[c + i] = P.geom.idx[i] + vo;
+    for (let i = 0; i < P.geom.luid.length; i++) { luid[b + i] = P.geom.luid[i] + uo; const nb = P.geom.lnb[i]; lnb[b + i] = nb === 65535 ? (big ? 0xffffffff : 65535) : nb + uo; }
+    for (let u = 0; u < P.count; u++) adj.push(P.adj[u].map((v, k) => k % 2 ? v : v + uo));
+    a += P.geom.uid.length; b += P.geom.luid.length; c += P.geom.idx.length; vo += P.geom.pos.length / 2; uo += P.count;
+  }
+  const f = list[0];
+  const M = { ...f, key, count: n, bbox: [Math.min(...list.map((P) => P.bbox[0])), Math.max(...list.map((P) => P.bbox[1])), Math.max(...list.map((P) => P.bbox[2])), Math.min(...list.map((P) => P.bbox[3]))],
+    pop: cat((P) => P.pop, Float32Array), area: cat((P) => P.area, Float32Array), perim: cat((P) => P.perim, Float32Array), county: cat((P) => P.county, Uint16Array),
+    names: list.flatMap((P) => P.names), ids: list.flatMap((P) => P.ids), cx: cat((P) => P.cx, Float64Array), cy: cat((P) => P.cy, Float64Array), adj,
+    units: list.flatMap((P) => P.units), geom: { pos: cat((P) => P.geom.pos, Float32Array), uid, idx, lpos: cat((P) => P.geom.lpos, Float32Array), luid, lnb, noNb: big ? 0xffffffff : 65535 } };
+  return M;
+}
+
+const loaded = new Map();
+// Load a pack for Draw / single-pack views (kept in memory). progress(fraction, text)
+export async function loadPack(key, progress = () => {}) {
+  if (loaded.has(key)) return loaded.get(key);
+  let P;
+  if (key.startsWith('L:')) {
+    const mf = await levelList(), [iso, L] = key.slice(2).split('_'), m = mf.find((x) => x.iso === iso && x.level === +L);
+    if (!m) throw new Error('Unknown level ' + key);
+    const parts = []; for (let i = 0; i < m.parts.length; i++) { progress(i / m.parts.length, `Loading ${m.title} · ${m.levelName} (${i + 1}/${m.parts.length})`); parts.push(await readPack('L:' + m.parts[i].key)); }
+    P = mergePacks(parts, key); P.title = m.title; P.levelName = m.levelName;
+  } else P = await readPack(key, progress);
+  progress(1, 'Ready');
+  if (loaded.size > 3) loaded.delete(loaded.keys().next().value); // keep memory in check
+  loaded.set(key, P);
   return P;
 }
 export const isLoaded = (state) => loaded.has(state);

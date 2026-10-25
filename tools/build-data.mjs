@@ -220,6 +220,7 @@ for (let c = 1; c < nC; c++) {
   if (wsum > 0) for (let k = cnt[c]; k < cnt[c + 1]; k++) { const i = byC[k]; fPop[i] += R * urbanW[i] / wsum; }
   else if (cnt[c + 1] > cnt[c]) for (let k = cnt[c]; k < cnt[c + 1]; k++) fPop[byC[k]] += R / (cnt[c + 1] - cnt[c]);
 }
+// (fine population raster is exported after the county rescale for the admin-level builder)
 // US counties: rescale to real census population
 log('county census rescale');
 {
@@ -235,6 +236,7 @@ log('county census rescale');
     if (isNaN(fac[k])) fPop[i] = counties[k - 1].censusPop / ncell[k]; else fPop[i] *= fac[k];
   }
 }
+fs.writeFileSync(path.join(RAW, 'fpop.bin'), Buffer.from(fPop.buffer)); // 7200x3600 float32, people per 0.05° cell
 // province/county pop & area & adjacency
 log('unit stats + adjacency');
 function unitStats(arr, units) {

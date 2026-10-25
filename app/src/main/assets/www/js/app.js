@@ -6,6 +6,7 @@ import { tick, applyDisaster } from './sim.js';
 import { buildCatalog, colorize, unitAgg } from './themes.js';
 import { planStats, paintUnits, brushCells, floodUnits, eligible, districtVotes, parentUnits, unitLayer, planLayer, paintCoi, ensureCoi, COI_COLORS } from './plans.js';
 import { loadPack, getLoaded } from './precincts.js';
+import { LV, LEVEL_THEMES, setLevel, scheduleLevelUpdate, colorLevels, pickLevel, levelLabels } from './levels.js';
 import { getSlot, putSlot, serialize, deserialize } from './store.js';
 import { TERRAIN_COLORS, clamp, h, hsl } from './util.js';
 import * as UI from './panels.js';
@@ -64,7 +65,8 @@ export async function boot() {
     app.R.onLabels = drawLabels;
     app.basemap = new Basemap(document.getElementById('tilesBase'), document.getElementById('tilesLabels'), document.getElementById('attr'));
     app.basemap.onOffline = () => { app.basemapOffline = true; UI.refreshPanels(); app.basemap.setStyle('none'); app.R.opts.opacity = 1; app.R.opts.grid = app.show.grid; if (app.R.points) app.R.points.visible = app.show.cities; app.R.dirty(); };
-    app.R.onFrame = (R) => app.basemap.update(R);
+    let lastCam = '';
+    app.R.onFrame = (R) => { app.basemap.update(R); const k = R.cam.x.toFixed(5) + R.cam.y.toFixed(5) + R.cam.s.toFixed(0); if (k !== lastCam) { lastCam = k; if (LV.level) scheduleLevelUpdate(app); } };
     applyMapStyle();
     window.addEventListener('resize', () => app.R.resize());
     // Android may drop the GPU context while the app is in the background: save, then reload from the autosave
@@ -96,7 +98,15 @@ export function setWorld(W) {
 export function autosave() { try { app.lastAutosave = Date.now(); return putSlot('autosave', serialize(app.W)); } catch (e) { console.warn(e); } }
 
 // ---------------------------------------------------------------- themes & colours
-export const theme = () => app.catalog.find((t) => t.id === app.themeId) || app.catalog[0];
+export const theme = () => {
+  if (LV.level) { const t = LEVEL_THEMES.find((x) => x.id === app.themeId) || LEVEL_THEMES[0]; return { ...t, layer: 'level', group: 'Map level', value: () => NaN, catColor: () => [0, 0, 0], catLabel: () => '' }; }
+  return app.catalog.find((t) => t.id === app.themeId) || app.catalog[0];
+};
+export async function chooseLevel(level) {
+  if (level && app.mode !== 'explore') UI.setMode('explore');
+  if (!level && app.themeId.startsWith('lv_')) app.themeId = 'nations';
+  await setLevel(app, level); select(null); refresh(); UI.refreshPanels();
+}
 export const plan = () => app.W.plans.find((p) => p.id === app.activePlan) || null;
 export function rebuildCatalog() { app.catalog = buildCatalog(app); }
 export function setTheme(id) { app.themeId = id; refresh(); UI.refreshPanels(); }
@@ -163,6 +173,7 @@ export function restoreHistory() {
 }
 function refreshInner() {
   const W = app.W, D = app.D, t = theme(), land = W.land, N = W.N;
+  if (LV.level && app.mode !== 'draw') return refreshLevelView();
   const poly = polyLayerShown(), p = app.mode === 'draw' ? plan() : null;
   const base = app.baseRGBA, out = app.cellRGBA, grp = app.groupRGBA;
   // ---- cell base colours
@@ -199,6 +210,19 @@ function refreshInner() {
   app.R.dirty();
 }
 
+// Map-level view: the cell grid becomes a quiet backdrop; admin areas are coloured on top.
+function refreshLevelView() {
+  const W = app.W, base = app.baseRGBA, land = W.land;
+  for (const i of land) { const o = i * 4; base[o] = 54; base[o + 1] = 59; base[o + 2] = 68; base[o + 3] = 255; }
+  app.cellColorOne = null; app.smooth = null;
+  composeCells(land);
+  for (const L of ['provinces', 'counties', 'precincts', 'nationProv', 'nationUnder']) if (app.R.polys[L]) app.R.polys[L].visible = false;
+  app.R.setThickLines('nationBorders', null); districtOutlines(null);
+  app.R.opts.grid = false;
+  if (app.R.thick.realBorders) app.R.thick.realBorders.visible = app.show.borders;
+  app.R.setCellColors(app.cellRGBA); app.R.setCellGroups(app.groupRGBA);
+  colorLevels(app); updateHighlight(); app.R.dirty();
+}
 // Combine base colours with the active plan / selection into the textures.
 function composeCells(list) {
   const W = app.W, base = app.baseRGBA, out = app.cellRGBA, grp = app.groupRGBA, t = theme();
@@ -359,7 +383,7 @@ function districtOutlines(p) {
   const A = app.drawTab === 'coi' && p.coiAssign ? p.coiAssign : p.assign, out = [];
   for (let k = 0; k < g.luid.length; k += 2) {
     const d = A[g.luid[k]]; if (d < 0) continue;
-    const nb = g.lnb[k], e = nb === 65535 ? -2 : A[nb];
+    const nb = g.lnb[k], e = (nb === 65535 || nb === 0xffffffff) ? -2 : A[nb];
     if (e !== d) out.push(g.lpos[k * 2], g.lpos[k * 2 + 1], g.lpos[k * 2 + 2], g.lpos[k * 2 + 3]);
   }
   app.R.setOverlayLines('districts', new Float32Array(out));
@@ -430,6 +454,17 @@ function drawLabels(ctx, R) {
   const padB = (R.pad && R.pad.b) || 0; boxes.push([0, 0, vw, 62], [0, vh - padB, vw, padB + 40]);
   if (p && app.planCentroids) for (const c of app.planCentroids) { if (!c) continue; const [x, y] = R.worldToScreen(c[0], c[1]); label(String(c[2] + 1), x, y, 15, '#fff', 800); }
   if (!app.show.labels) return;
+  // admin-area names in the map-level view
+  if (LV.level && app.mode !== 'draw') {
+    let drawn = 0;
+    for (const [P, u] of levelLabels(app)) {
+      const lat = unMercY(P.cy[u]), pxKm = scale / (40075 * Math.cos(lat * Math.PI / 180)), span = Math.sqrt(P.area[u] || 0) * pxKm;
+      if (span < 46) break;
+      const [x, y] = R.worldToScreen(P.cx[u], P.cy[u]); if (x < -60 || x > vw + 60 || y < -20 || y > vh + 20) continue;
+      if (label(P.names[u], x, y, clamp(span / 9, 10, 15), '#f7f3ea', 600)) drawn++; if (drawn > 140) break;
+    }
+    return;
+  }
   // province / county names when zoomed in
   const poly = polyLayerShown();
   if (poly) {
@@ -509,6 +544,11 @@ export function select(sel) { app.sel = sel; updateHighlight(); UI.refreshPanels
 function updateHighlight() {
   const s = app.sel, R = app.R;
   if (!s) { R.setHighlight(null); return; }
+  if (s.lv) {
+    const g = s.lv.P.geom, out = [];
+    for (let k = 0; k < g.luid.length; k += 2) if (g.luid[k] === s.lv.u) out.push(g.lpos[k * 2], g.lpos[k * 2 + 1], g.lpos[k * 2 + 2], g.lpos[k * 2 + 3]);
+    R.setHighlight(new Float32Array(out)); return;
+  }
   if (s.unit != null && s.layer) {
     const LY = layerFor(s.layer); if (!LY) { R.setHighlight(null); return; } const g = LY.geom; const out = [];
     for (let k = 0; k < g.luid.length; k += 2) if (g.luid[k] === s.unit) out.push(g.lpos[k * 2], g.lpos[k * 2 + 1], g.lpos[k * 2 + 2], g.lpos[k * 2 + 3]);
@@ -524,9 +564,10 @@ function updateHighlight() {
 // polygon hit testing with a bucket grid of triangles
 const hitIndex = {};
 app.hitReset = (layer) => { delete hitIndex[layer]; };
-export function pickUnit(layer, wx, wy) {
-  const LY = layerFor(layer); if (!LY) return -1;
-  const g = LY.geom, B = 256;
+app.pickUnitIn = (layer, g, wx, wy) => pickUnitIn(layer, g, wx, wy);
+export function pickUnit(layer, wx, wy) { const LY = layerFor(layer); return LY ? pickUnitIn(layer, LY.geom, wx, wy) : -1; }
+export function pickUnitIn(layer, g, wx, wy) {
+  const B = 256;
   let ix = hitIndex[layer];
   if (!ix) {
     const counts = new Int32Array(B * B + 1), P = g.pos, I = g.idx, nt = I.length / 3;
@@ -669,6 +710,7 @@ function onTap(px, py) {
     if (app.editTool === 'capital' && i >= 0 && W.owner[i]) { const n = W.nations[W.owner[i]]; n.capital = i; UI.toast(`New capital of ${n.name}`); UI.refreshPanels(); return; }
     if (app.editTool === 'diplomacy' && i >= 0 && W.owner[i] && app.sel && app.sel.nation && W.owner[i] !== app.sel.nation) { app.diploTarget = W.owner[i]; UI.refreshPanels(); return; }
   }
+  if (LV.level && app.mode === 'explore') { const hit = pickLevel(app, wx, wy); if (hit) { select({ lv: hit, cell: i, nation: i >= 0 ? W.owner[i] : 0 }); UI.showInfo(); return; } }
   if (i < 0 || !W.D.cells.country[i]) { const poly = polyLayerShown(); if (!poly) { select(null); UI.hideInfo(); return; } }
   const poly = polyLayerShown();
   if (poly) { const u = pickUnit(poly, wx, wy); if (u >= 0) { select({ unit: u, layer: poly, cell: i, nation: i >= 0 ? W.owner[i] : 0 }); UI.showInfo(); return; } }
