@@ -4,7 +4,8 @@ import { loadData } from './data.js';
 import { createWorld, computeAggregates, computeAdjacency, cellAt, cellLngLat, addNews, newNation, ownerAt, rel, setRel } from './world.js';
 import { tick, applyDisaster } from './sim.js';
 import { buildCatalog, colorize, unitAgg } from './themes.js';
-import { planStats, paintUnits, brushCells, floodUnits, eligible, districtVotes, parentUnits } from './plans.js';
+import { planStats, paintUnits, brushCells, floodUnits, eligible, districtVotes, parentUnits, unitLayer, planLayer } from './plans.js';
+import { loadPack, getLoaded } from './precincts.js';
 import { getSlot, putSlot, serialize, deserialize } from './store.js';
 import { TERRAIN_COLORS, clamp, h, hsl } from './util.js';
 import * as UI from './panels.js';
@@ -43,12 +44,14 @@ export async function boot() {
     app.R.addPolyLayer('provinces', D.geom.prov); app.R.addPolyLayer('counties', D.geom.county);
     app.R.addPolyLayer('countryFill', D.geom.country, { lineColors: true });
     app.R.addPolyLayer('nationProv', D.geom.prov, { share: 'provinces', lineColors: true });
-    app.R.polyOrder = ['countryFill', 'nationProv', 'provinces', 'counties'];
+    app.R.polyOrder = ['countryFill', 'nationProv', 'provinces', 'counties', 'precincts'];
+    D.packs = {};
     app.R.setLandMask('countryFill', D.geom.lakes);
     app.unitRGBA = { provinces: new Uint8Array(D.units.provinces.length * 4), counties: new Uint8Array(D.units.counties.length * 4) };
     prepareSmooth(D, W0, H0);
     app.R.addLineLayer('countries', D.geom.country.lpos, [0.92, 0.94, 1, 0.22], 0);
     app.R.addLineLayer('provLines', D.geom.prov.lpos, [0.04, 0.05, 0.08, 0.55], 0); app.R.lines.provLines.visible = false;
+    app.R.addLineLayer('countyLines', D.geom.county.lpos, [0.03, 0.04, 0.06, 0.7], 0); app.R.lines.countyLines.visible = false;
     setupCities();
     progress('Building the world…', 0.85);
     let W = null;
@@ -95,9 +98,39 @@ export const plan = () => app.W.plans.find((p) => p.id === app.activePlan) || nu
 export function rebuildCatalog() { app.catalog = buildCatalog(app); }
 export function setTheme(id) { app.themeId = id; refresh(); UI.refreshPanels(); }
 
+// Unit layer (provinces / counties / the active precinct pack) for a layer name used by the renderer.
+export function layerFor(name) {
+  if (name === 'precincts') return app.activePack ? unitLayer(app.W, 'precincts', app.activePack) : null;
+  return unitLayer(app.W, name);
+}
+// Load a state's precinct pack (download once), make it the active precinct layer.
+export async function usePack(state, progress) {
+  if (app.activePack === state && app.D.packs[state]) return app.D.packs[state];
+  const P = await loadPack(state, progress);
+  if (!P.countyLabels) { // FIPS codes -> county names from the bundled US county list
+    const byFips = new Map(app.D.units.counties.map((c) => [String(c.fips).padStart(5, '0'), c.n]));
+    P.countyLabels = P.countyNames.map((c) => { const t = String(c).trim(); const f = /^\d{1,3}$/.test(t) ? P.stateFips + t.padStart(3, '0') : /^\d{5}$/.test(t) ? t : null; return (f && byFips.get(f)) || t; });
+  }
+  app.D.packs = { [state]: P }; // keep one in memory at a time
+  app.activePack = state;
+  if (app.R.polys.precincts) app.R.removePolyLayer('precincts');
+  app.R.addPolyLayer('precincts', P.geom);
+  app.unitRGBA.precincts = new Uint8Array(P.count * 4);
+  app.hitReset && app.hitReset('precincts'); delete ucCache.precincts; app._uc_precincts = null;
+  rebuildCatalog();
+  return P;
+}
+// Make sure the active plan's precinct pack is loaded before showing it.
+export async function ensurePlanPack() {
+  const p = plan(); if (!p || p.unit !== 'precincts' || (app.activePack === p.pack && app.D.packs[p.pack])) return true;
+  UI.toast(`Loading ${p.pack} precincts…`);
+  try { await usePack(p.pack, (f, t) => UI.toast(t)); computePlanStats(); refresh(); UI.refreshPanels(); return true; }
+  catch (e) { UI.toast(e.message, 5000); return false; }
+}
 function polyLayerShown() {
   const t = theme(), p = plan();
-  if (app.mode === 'draw' && p && p.unit !== 'cells') return p.unit;
+  if (app.mode === 'draw' && p && p.unit !== 'cells') return p.unit === 'precincts' && !(app.activePack === p.pack && app.D.packs[p.pack]) ? null : p.unit;
+  if (t.layer === 'precincts' && !app.activePack) return null;
   return t.layer !== 'cells' ? t.layer : null;
 }
 
@@ -140,9 +173,9 @@ function refreshInner() {
   composeCells(land);
   applySmooth();
   // ---- polygon layers
-  for (const L of ['provinces', 'counties']) app.R.polys[L].visible = poly === L;
+  for (const L of ['provinces', 'counties', 'precincts']) if (app.R.polys[L]) app.R.polys[L].visible = poly === L;
   if (poly) {
-    const units = poly === 'provinces' ? D.units.provinces : D.units.counties, arr = app.unitRGBA[poly];
+    const units = layerFor(poly).units, arr = app.unitRGBA[poly];
     const tt = t.layer === poly ? t : app.catalog.find((x) => x.layer === poly);
     const lg = colorize(tt, null, units.length, tt.value, arr);
     if (t.layer === poly) app.legend = lg;
@@ -153,7 +186,8 @@ function refreshInner() {
   }
   app.R.opts.grid = app.show.grid && !(app.basemap && app.basemap.online);
   app.R.lines.countries.visible = app.show.borders || (!!p && p.unit === 'provinces' && app.drawOpts.boundaries);
-  app.R.lines.provLines.visible = !!p && p.unit !== 'provinces' && app.drawOpts.boundaries;
+  app.R.lines.provLines.visible = !!p && (p.unit === 'cells' || p.unit === 'counties') && app.drawOpts.boundaries;
+  app.R.lines.countyLines.visible = (!!p && p.unit === 'precincts' && app.drawOpts.boundaries) || (poly === 'precincts' && !p);
   if (!poly) districtOutlines(null);
   app.R.setCellColors(out); app.R.setCellGroups(grp);
   updateHighlight();
@@ -285,7 +319,7 @@ function unsmoothFor(list) {
 // White outline around every district of a province / county plan.
 function districtOutlines(p) {
   if (!p || app.drawOpts.hideDistricts) { app.R.setOverlayLines('districts', null); return; }
-  const g = p.unit === 'provinces' ? app.D.geom.prov : app.D.geom.county; if (!g.lnb) return;
+  const LY = planLayer(app.W, p); if (!LY) return; const g = LY.geom; if (!g.lnb) return;
   const A = p.assign, out = [];
   for (let k = 0; k < g.luid.length; k += 2) {
     const d = A[g.luid[k]]; if (d < 0) continue;
@@ -354,7 +388,7 @@ function drawLabels(ctx, R) {
   // province / county names when zoomed in
   const poly = polyLayerShown();
   if (poly) {
-    const C = unitCenters(poly), units = poly === 'provinces' ? app.D.units.provinces : app.D.units.counties;
+    const C = unitCenters(poly), units = layerFor(poly).units;
     let drawn = 0;
     for (const u of C.order) {
       const lat = unMercY(C.y[u]), pxKm = scale / (40075 * Math.cos(lat * Math.PI / 180));
@@ -394,7 +428,7 @@ function drawLabels(ctx, R) {
 const ucCache = {};
 function unitCenters(layer) {
   if (ucCache[layer]) return ucCache[layer];
-  const g = layer === 'provinces' ? app.D.geom.prov : app.D.geom.county, units = layer === 'provinces' ? app.D.units.provinces : app.D.units.counties;
+  const LY = layerFor(layer), g = LY.geom, units = LY.units;
   const n = units.length, x = new Float64Array(n), y = new Float64Array(n), c = new Float64Array(n);
   for (let v = 0; v < g.uid.length; v++) { const u = g.uid[v]; x[u] += g.pos[v * 2]; y[u] += g.pos[v * 2 + 1]; c[u]++; }
   for (let u = 0; u < n; u++) if (c[u]) { x[u] /= c[u]; y[u] /= c[u]; }
@@ -431,7 +465,7 @@ function updateHighlight() {
   const s = app.sel, R = app.R;
   if (!s) { R.setHighlight(null); return; }
   if (s.unit != null && s.layer) {
-    const g = s.layer === 'provinces' ? app.D.geom.prov : app.D.geom.county; const out = [];
+    const LY = layerFor(s.layer); if (!LY) { R.setHighlight(null); return; } const g = LY.geom; const out = [];
     for (let k = 0; k < g.luid.length; k += 2) if (g.luid[k] === s.unit) out.push(g.lpos[k * 2], g.lpos[k * 2 + 1], g.lpos[k * 2 + 2], g.lpos[k * 2 + 3]);
     R.setHighlight(new Float32Array(out)); return;
   }
@@ -444,8 +478,10 @@ function updateHighlight() {
 
 // polygon hit testing with a bucket grid of triangles
 const hitIndex = {};
+app.hitReset = (layer) => { delete hitIndex[layer]; };
 export function pickUnit(layer, wx, wy) {
-  const g = layer === 'provinces' ? app.D.geom.prov : app.D.geom.county, B = 256;
+  const LY = layerFor(layer); if (!LY) return -1;
+  const g = LY.geom, B = 256;
   let ix = hitIndex[layer];
   if (!ix) {
     const counts = new Int32Array(B * B + 1), P = g.pos, I = g.idx, nt = I.length / 3;
@@ -614,10 +650,10 @@ export function computePlanStats() {
     for (const i of W.land) { const d = p.assign[i]; if (d < 0) continue; const a = (i % W.Wd) / W.Wd * 2 * Math.PI; cs[d] += Math.cos(a); sn[d] += Math.sin(a); sy[d] += (i / W.Wd) | 0; sc[d]++; }
     app.planCentroids = Array.from({ length: p.n }, (_, d) => { if (!sc[d]) return null; let a = Math.atan2(sn[d], cs[d]); if (a < 0) a += 2 * Math.PI; const lat = 90 - (sy[d] / sc[d] + 0.5) * 180 / W.Hd; return [a / (2 * Math.PI) + 0.5 / W.Wd, mercY(lat), d]; });
   } else {
-    const L = p.unit === 'provinces' ? W.D.units.provinces : null;
-    const g = p.unit === 'provinces' ? app.D.geom.prov : app.D.geom.county;
+    const LY = planLayer(W, p); if (!LY) { app.planCentroids = null; return; }
+    const g = LY.geom;
     // use vertex means per unit (cached)
-    const key = '_uc_' + p.unit; if (!app[key]) { const n = p.assign.length, x = new Float64Array(n), y = new Float64Array(n), c = new Float64Array(n); for (let v = 0; v < g.uid.length; v++) { const u = g.uid[v]; x[u] += g.pos[v * 2]; y[u] += g.pos[v * 2 + 1]; c[u]++; } app[key] = { x, y, c }; }
+    const key = '_uc_' + p.unit; if (!app[key] || app[key].x.length !== p.assign.length) { const n = p.assign.length, x = new Float64Array(n), y = new Float64Array(n), c = new Float64Array(n); for (let v = 0; v < g.uid.length; v++) { const u = g.uid[v]; x[u] += g.pos[v * 2]; y[u] += g.pos[v * 2 + 1]; c[u]++; } app[key] = { x, y, c }; }
     const U = app[key];
     for (let u = 0; u < p.assign.length; u++) { const d = p.assign[u]; if (d < 0 || !U.c[u]) continue; sx[d] += U.x[u] / U.c[u]; sy[d] += U.y[u] / U.c[u]; sc[d]++; }
     app.planCentroids = Array.from({ length: p.n }, (_, d) => sc[d] ? [sx[d] / sc[d], sy[d] / sc[d], d] : null);

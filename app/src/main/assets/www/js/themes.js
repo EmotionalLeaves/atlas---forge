@@ -1,5 +1,5 @@
 // Map themes: every attribute of every layer can colour the map. Plus user formulas and painted data layers.
-import { rampLUT, catColor, TERRAIN_COLORS, PARTY_COLORS, strHash, fmt, pct, clamp, hsl } from './util.js';
+import { rampLUT, catColor, TERRAIN_COLORS, PARTY_COLORS, strHash, fmt, pct, clamp, hsl, districtColor } from './util.js';
 import { rel, prodOf, prodFast } from './world.js';
 import { cellVote } from './sim.js';
 
@@ -73,7 +73,25 @@ export function buildCatalog(app) {
   // ---------- district plans ----------
   for (const p of W.plans) {
     const layer = p.unit;
+    if (layer === 'precincts' && p.pack !== app.activePack) continue;
     add({ id: 'plan_' + p.id, layer, group: 'District plans', label: `Districts: ${p.name}`, kind: 'cat', value: (u) => p.assign[u] + 1, catColor: (c) => c ? p.colors[c - 1] : [70, 72, 78], catLabel: (c) => c ? 'District ' + c : 'Unassigned', plan: p.id });
+  }
+
+  // ---------- real US precincts (active pack) ----------
+  const PK = app.activePack && D.packs && D.packs[app.activePack];
+  if (PK) {
+    const G2 = `Precincts — ${PK.title}`, pc = (k) => ({ layer: 'precincts', group: G2, ...k });
+    add(pc({ id: 'pc_name', label: 'Precincts', kind: 'cat', value: (u) => u + 1, catColor: (c) => catColor(c), catLabel: (c) => PK.units[c - 1].n, noLegend: true, static: true }));
+    add(pc({ id: 'pc_pop', label: 'Population (2010 Census)', kind: 'num', ramp: 'inferno', log: true, value: (u) => PK.pop[u] || NaN, fmt, static: true }));
+    add(pc({ id: 'pc_dens', label: 'Population density', kind: 'num', ramp: 'inferno', log: true, value: (u) => PK.area[u] > 0 ? PK.pop[u] / PK.area[u] : NaN, fmt: (v) => fmt(v) + '/km²', static: true }));
+    PK.race.forEach((r, k) => add(pc({ id: 'pc_r' + k, label: `${r.label} share of population`, kind: 'num', ramp: 'purples', domain: [0, 1], value: (u) => PK.pop[u] > 0 ? r.data[u] / PK.pop[u] : NaN, fmt: (v) => pct(v), static: true })));
+    PK.vrace.forEach((r, k) => add(pc({ id: 'pc_v' + k, label: `${r.label} share of voting-age pop.`, kind: 'num', ramp: 'purples', domain: [0, 1], value: (u) => PK.vap && PK.vap[u] > 0 ? r.data[u] / PK.vap[u] : NaN, fmt: (v) => pct(v), static: true, hidden: true })));
+    PK.elections.forEach((e, k) => {
+      add(pc({ id: 'pc_e' + k, label: `${e.label}: Dem vs Rep`, kind: 'div', ramp: 'partisan', domain: [0.2, 0.8], value: (u) => { const t = e.d[u] + e.r[u]; return t > 0 ? e.d[u] / t : NaN; }, fmt: (v) => v >= 0.5 ? `D +${Math.round((2 * v - 1) * 100)}` : `R +${Math.round((1 - 2 * v) * 100)}`, static: true, desc: 'Blue = Democratic, red = Republican (two-party share)' }));
+      if (PK.vap) add(pc({ id: 'pc_t' + k, label: `${e.label}: turnout (votes ÷ voting-age pop.)`, kind: 'num', ramp: 'viridis', domain: [0, 1], value: (u) => PK.vap[u] > 0 ? Math.min(1, (e.d[u] + e.r[u]) / PK.vap[u]) : NaN, fmt: (v) => pct(v), static: true, hidden: true }));
+    });
+    PK.plans.forEach((pl, k) => add(pc({ id: 'pc_p' + k, label: `Real map: ${pl.label}`, kind: 'cat', value: (u) => pl.assign[u] + 1, catColor: (c) => c ? districtColor(c - 1) : [70, 72, 78], catLabel: (c) => c ? 'District ' + c : '—', static: true, noLegend: pl.n > 14 })));
+    add(pc({ id: 'pc_county', label: 'County', kind: 'cat', value: (u) => PK.county[u] + 1, catColor: (c) => catColor(c * 3), catLabel: (c) => (PK.countyLabels || PK.countyNames)[c - 1] || '', noLegend: true, static: true }));
   }
 
   // ---------- provinces ----------

@@ -133,6 +133,11 @@ export class MapRenderer {
     if (lineColors) { L.lcol = gl.createBuffer(); L.lcolData = new Uint8Array(geom.luid.length * 4); gl.bindBuffer(gl.ARRAY_BUFFER, L.lcol); gl.bufferData(gl.ARRAY_BUFFER, L.lcolData, gl.DYNAMIC_DRAW); }
     this.polys[name] = L; return L;
   }
+  removePolyLayer(name) {
+    const L = this.polys[name]; if (!L) return; const gl = this.gl;
+    for (const b of [L.pos, L.idx, L.lbuf, L.col, L.lcol]) if (b) gl.deleteBuffer(b);
+    delete this.polys[name]; this.dirty();
+  }
   setPolyColors(name, unitRGBA, lineRGBA) { // Uint8Array(4*units) each
     const L = this.polys[name], uid = L.geom.uid, c = L.colData, gl = this.gl;
     for (let i = 0; i < uid.length; i++) { const u = uid[i] * 4, o = i * 4; c[o] = unitRGBA[u]; c[o + 1] = unitRGBA[u + 1]; c[o + 2] = unitRGBA[u + 2]; c[o + 3] = unitRGBA[u + 3]; }

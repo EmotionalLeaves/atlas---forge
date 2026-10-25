@@ -163,10 +163,13 @@ for (const f of fields) {
   planCols.push({ key: f.name, label: nice, n: distinct.size, assign: Int16Array.from(vals, (v) => map.has(v) ? map.get(v) : -1) });
 }
 // county of each precinct
-const cntyK = firstOf('COUNTYFP10', 'COUNTYFP', 'COUNTYFP20', 'CNTYFIPS', 'COUNTY', 'FIPS') || fields.find((f) => /^(COUNTYFP|COUNTY|CNTY)/i.test(f.name))?.name;
+const anyOf = (...ks) => { for (const k of ks) { const f = fields.find((x) => x.name.toUpperCase() === k.toUpperCase()); if (f) return f.name; } return null; };
+const cntyK = anyOf('COUNTYNAME', 'county_nam', 'CTYNAME', 'CNTY_NAME', 'COUNTY_NAM', 'County', 'locality', 'PARISH', 'TOWN') || firstOf('COUNTYFP10', 'COUNTYFP', 'COUNTYFP20', 'CNTYFIPS', 'COUNTYFIPS', 'CountyFips', 'FIPS1') || fields.find((f) => /^(COUNTYFP|COUNTY|CNTY)/i.test(f.name))?.name;
 const nameK = fields.find((f) => /^(NAME10|NAME|PRECINCT|PREC_NAME|NAMELSAD10|VTDNAME|WARD|LABEL)/i.test(f.name))?.name;
 const idK = fields.find((f) => /^(GEOID10|GEOID20|GEOID|VTDST10|PRECINCT|LOC_PREC|PRECODE|ID)$/i.test(f.name))?.name;
 const countyNames = [...new Set(rows.map((r) => String(r[cntyK] ?? '')))].sort();
+const stFK = fields.find((f) => /^STATEFP/i.test(f.name))?.name, geoK = fields.find((f) => /^GEOID/i.test(f.name))?.name;
+const stateFips = String(stFK ? rows[0][stFK] : geoK ? String(rows[0][geoK]).slice(0, 2) : '').padStart(2, '0');
 const countyIdx = new Map(countyNames.map((c, k) => [c, k]));
 
 // ---------------- geometry: unproject + quantise ----------------
@@ -264,7 +267,26 @@ simple.forEach((rs, u) => {
   }
   centers[u * 2] = (cx / (ca || 1) - ox) / Q; centers[u * 2 + 1] = (cy / (ca || 1) - oy) / Q; areaW[u] = ca / Q / Q;
 });
-// precincts that touch only at a corner / across water get linked to their nearest neighbour later in the app (contiguity uses adj only)
+// extra adjacency: precincts that share a corner, or whose borders come within ~60 m (rivers, slivers)
+{
+  const pairSet = new Set(adj.keys());
+  const addPair = (a, b) => { if (a === b) return; const k = Math.min(a, b) + ',' + Math.max(a, b); if (!pairSet.has(k)) { pairSet.add(k); adj.set(k, 0); } };
+  const cell = Math.round(Q * 60 / 40075016 * 1.4); // ~60 m at mid-latitudes, in quantised units
+  const grid = new Map();
+  polys.forEach((rs, u) => { const seen = new Set(); for (const r of rs) for (const [x, y] of r) { const k = Math.floor(x / cell) + ',' + Math.floor(y / cell); if (seen.has(k)) continue; seen.add(k); let a = grid.get(k); if (!a) grid.set(k, a = []); a.push(u); } });
+  for (const [k, list] of grid) {
+    const [gx, gy] = k.split(',').map(Number);
+    const near = [...list]; for (const [dx, dy] of [[1, 0], [0, 1], [1, 1], [1, -1]]) { const o = grid.get((gx + dx) + ',' + (gy + dy)); if (o) near.push(...o); }
+    const uniq = [...new Set(near)]; if (uniq.length > 12) continue; // skip dense junk clusters
+    for (let i = 0; i < uniq.length; i++) for (let j = i + 1; j < uniq.length; j++) addPair(uniq[i], uniq[j]);
+  }
+  // islands: connect any precinct still without neighbours to the nearest precinct centre
+  const deg = new Int32Array(rows.length); for (const k of adj.keys()) { const [a, b] = k.split(',').map(Number); deg[a]++; deg[b]++; }
+  for (let u = 0; u < rows.length; u++) if (!deg[u] && polys[u].length) {
+    let best = -1, bd = Infinity; for (let v = 0; v < rows.length; v++) { if (v === u || !polys[v].length) continue; const d = (centers[u * 2] - centers[v * 2]) ** 2 + (centers[u * 2 + 1] - centers[v * 2 + 1]) ** 2; if (d < bd) { bd = d; best = v; } }
+    if (best >= 0) addPair(u, best);
+  }
+}
 const adjArr = [], adjLen = [];
 const kmAt = (yw) => 40075.016686 * Math.cos(Math.atan(Math.sinh(Math.PI * (1 - 2 * yw)))); // km per world unit at mercator y
 for (const [k, len] of adj) { const [a, b] = k.split(',').map(Number); adjArr.push(a, b); adjLen.push(len * kmAt(oy / Q + centers[a * 2 + 1])); }
@@ -286,7 +308,7 @@ const header = {
   race: race.map(([label, k]) => ({ label, data: blob(col(k)) })), vrace: vrace.map(([label, k]) => ({ label, data: blob(col(k)) })),
   elections: elecFinal.map((e) => ({ key: e.key, label: e.label, d: blob(col(e.d)), r: blob(col(e.r)) })),
   plans: planCols.map((p) => ({ key: p.key, label: p.label, n: p.n, assign: blob(p.assign) })),
-  county: blob(Uint16Array.from(rows, (r) => countyIdx.get(String(r[cntyK] ?? '')))), countyNames,
+  county: blob(Uint16Array.from(rows, (r) => countyIdx.get(String(r[cntyK] ?? '')))), countyNames, stateFips,
   names: rows.map((r) => String(nameK ? r[nameK] : '').slice(0, 40)), ids: rows.map((r) => String(idK ? r[idK] : '')),
   center: blob(Float32Array.from(centers)), area: blob(Float32Array.from(areaW, (a, u) => a * kmAt(oy / Q + centers[u * 2 + 1]) ** 2)), perim: blob(Float32Array.from(perim)),
   adj: blob(Uint16Array.from(adjArr)), adjLen: blob(Float32Array.from(adjLen)),

@@ -234,3 +234,7 @@ small.block { display: block; color: var(--muted); font-size: 12px; margin-top: 
 .check { display: grid; grid-template-columns: 20px auto 1fr; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .check b { font-size: 14px; } .check.ok b { color: var(--good); } .check.no b { color: #ff9b85; }
 .check small { color: var(--muted); text-align: right; }
+.racebar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin: 8px 0 4px; }
+.racebar i { display: block; height: 100%; }
+.vs.wide { grid-template-columns: 112px 1fr; }
+td.maj { color: var(--accent2); font-weight: 700; }

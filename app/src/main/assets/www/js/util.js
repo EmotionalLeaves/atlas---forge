@@ -32,6 +32,8 @@ export const RAMPS = {
   ember: ['#2a1708', '#7a3510', '#c9601a', '#f2a541', '#fff1c2'],
   diverge: ['#b8235a', '#ec8fb0', '#f3efe6', '#8fd1c6', '#0d7d70'],
   stability: ['#8c1d18', '#e2683c', '#f5d061', '#9ed36a', '#2e9b55'],
+  partisan: ['#b2182b', '#ef8a62', '#f4f1ee', '#67a9cf', '#2166ac'],
+  purples: ['#1d1035', '#4b2a7b', '#7e57b5', '#b9a3dd', '#efe9f8'],
 };
 const rampCache = {};
 export function rampLUT(name) {

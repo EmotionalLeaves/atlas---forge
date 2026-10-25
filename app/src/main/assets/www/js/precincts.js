@@ -33,7 +33,7 @@ export function parsePack(raw) {
     race: H.race.map((r) => ({ label: r.label, data: get(r.data) })), vrace: H.vrace.map((r) => ({ label: r.label, data: get(r.data) })),
     elections: H.elections.map((e) => ({ key: e.key, label: e.label, d: get(e.d), r: get(e.r) })),
     plans: H.plans.map((p) => ({ key: p.key, label: p.label, n: p.n, assign: get(p.assign) })),
-    county: get(H.county), countyNames: H.countyNames, names: H.names, ids: H.ids,
+    county: get(H.county), countyNames: H.countyNames, stateFips: H.stateFips || '', names: H.names, ids: H.ids,
     area: get(H.area), perim: get(H.perim),
   };
   // geometry -> world coordinates
