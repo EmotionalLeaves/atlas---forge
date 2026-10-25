@@ -18,7 +18,7 @@
     "appId": "com.emotionalleaves.atlasforge",
     "productName": "Atlas Forge",
     "directories": { "output": "dist" },
-    "files": ["main.js", "package.json"],
+    "files": ["main.js", "package.json", "icon.png"],
     "extraResources": [{ "from": "www", "to": "www" }],
     "asar": true,
     "compression": "normal",

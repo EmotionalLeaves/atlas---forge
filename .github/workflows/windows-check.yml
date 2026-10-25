@@ -1,0 +1,34 @@
+name: Windows build check
+
+# Quick check of the Windows packaging alone (uses the app files in the repo, without the big map data).
+on:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build
+        working-directory: desktop
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          cp -r ../app/src/main/assets/www www
+          npm install --no-audit --no-fund 2>&1 | tee build-win.log
+          npx electron-builder --win --x64 --publish never 2>&1 | tee -a build-win.log
+          ls -la dist | tee -a build-win.log
+      - name: Keep the log
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p /tmp/ciw && (cp desktop/build-win.log /tmp/ciw/build-win.log 2>/dev/null || echo "no log" > /tmp/ciw/build-win.log)
+          echo "${{ job.status }}" > /tmp/ciw/status.txt
+          cd /tmp/ciw && git init -q && git checkout -q -b ci-log-wincheck
+          git config user.name "ci" && git config user.email "ci@users.noreply.github.com"
+          git add . && git commit -qm "windows check"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" ci-log-wincheck

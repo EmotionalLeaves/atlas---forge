@@ -142,10 +142,10 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
           set -o pipefail
-          npm version 1.0.${{ github.run_number }} --no-git-tag-version --allow-same-version
-          npm install --no-audit --no-fund
-          npx electron-builder --win --x64 --publish never 2>&1 | tee build-win.log
-          ls -la dist
+          npm version 1.0.${{ github.run_number }} --no-git-tag-version --allow-same-version 2>&1 | tee build-win.log
+          npm install --no-audit --no-fund 2>&1 | tee -a build-win.log
+          npx electron-builder --win --x64 --publish never 2>&1 | tee -a build-win.log
+          ls -la dist | tee -a build-win.log
 
       - name: Attach to the release
         uses: softprops/action-gh-release@v2
@@ -154,3 +154,14 @@ jobs:
           files: |
             desktop/dist/AtlasForge-Setup-*.exe
             desktop/dist/AtlasForge-Windows-*.zip
+
+      - name: Keep the Windows build log on the ci-log-win branch
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p /tmp/ciw && (cp desktop/build-win.log /tmp/ciw/build-win.log 2>/dev/null || echo "no log" > /tmp/ciw/build-win.log)
+          echo "${{ job.status }} run=${{ github.run_number }}" > /tmp/ciw/status.txt
+          cd /tmp/ciw && git init -q && git checkout -q -b ci-log-win
+          git config user.name "ci" && git config user.email "ci@users.noreply.github.com"
+          git add . && git commit -qm "windows log ${{ github.run_number }}"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" ci-log-win
