@@ -128,6 +128,32 @@ export function toast(text, ms = 2600) {
   const t = $('#toast'); t.textContent = text; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms);
 }
 
+// ------------------------------------------------------------------ hint
+// One line under the header that says what a tap or drag on the map will do right now.
+function hintText() {
+  const W = app.W, p = plan();
+  if (app.histOwner) return 'Showing old borders. Drag the History slider back to Now';
+  if (app.mode === 'draw' && p && ['paint', 'coi'].includes(app.drawTab)) {
+    if (app.drawTab === 'coi') { const c = p.cois && p.cois[app.coi]; if (!c) return 'Add a community in the panel, then paint it on the map'; return app.tool === 'brush' ? `Drag across the map to mark “${c.name}”` : app.tool === 'erase' ? 'Drag to unmark areas' : 'Choose Paint to mark this community on the map'; }
+    const d = `district ${app.district + 1}`;
+    return { pan: `Choose Paint, then drag across the map to build ${d}`, brush: `Drag to paint ${d} · two fingers move the map`, erase: 'Drag to take areas out of their district', fill: `Tap an area to fill it and its connected neighbours with ${d}`, pick: 'Tap a district on the map to paint with it' }[app.tool] || '';
+  }
+  if (app.mode === 'edit') {
+    const n = W.nations[app.paintNation];
+    if (app.editTool === 'borders') return !app.paintChosen ? 'Choose a nation in the panel, then paint land for it' : app.tool === 'brush' ? `Drag to give land to ${n ? n.name : 'nobody (unclaimed)'}` : app.tool === 'pick' ? 'Tap a nation to paint as it' : 'Choose Paint to move borders';
+    if (app.editTool === 'data') return app.tool === 'brush' ? 'Drag to paint the new value' : 'Choose Paint, then drag over the map';
+    if (app.editTool === 'disaster') return app.disaster && DISASTERS[app.disaster] ? `Tap the map where the ${DISASTERS[app.disaster].label.toLowerCase()} strikes` : 'Pick a disaster in the panel';
+    if (app.editTool === 'release') return 'Tap a province to make it independent';
+    if (app.editTool === 'capital') return 'Tap where the new capital should be';
+    if (app.editTool === 'nations') return 'Tap a nation to edit it';
+    if (app.editTool === 'diplomacy') return app.sel && app.sel.nation ? 'Tap another nation to see or change relations' : 'Tap a nation to start';
+  }
+  if (app.mode === 'sim' && !app.running && !W.month) return 'Press play to start history · tap a nation to follow it';
+  if (app.mode === 'explore' && !infoOpen && !app.tappedOnce) return LV.level ? 'Tap any area for its name, population and parent region' : 'Tap any place for details · pinch to zoom';
+  return '';
+}
+function renderHint() { const el = $('#hint'); if (!el) return; const t = hintText(); el.textContent = t; el.hidden = !t; }
+
 // ------------------------------------------------------------------ the dock
 // One floating instrument bar above the sheet: drawing tools in Draw / God mode, the clock in Simulate.
 function renderDock() {
@@ -200,7 +226,7 @@ function mapLegend() {
   el.append(h('div', { class: 'ml-t' }, t.label), c, h('div', { class: 'ml-v' }, h('span', null, L.fmt(L.min)), h('span', null, L.fmt(L.max))));
 }
 export function refreshPanels() {
-  renderDock(); mapLegend();
+  renderDock(); renderHint(); mapLegend();
   $('#date').textContent = app.mode === 'draw' && plan() ? plan().name : dateLabel();
   const t = theme(); $('#themeBtn').innerHTML = ''; $('#themeBtn').append(h('span', { class: 'swatch ' + (t.kind === 'cat' ? 'cat' : '') , style: { background: swatchBg(t) } }), h('span', { class: 'tl' }, t.label), h('span', { class: 'caret' }, '▾'));
   const body = $('#sheetBody'); const scroll = body.scrollTop; body.innerHTML = '';
@@ -277,14 +303,16 @@ function welcomeCard() {
   let seen = false; try { seen = localStorage.getItem('af_welcome') === '1'; } catch {}
   if (seen) return null;
   const close = () => { try { localStorage.setItem('af_welcome', '1'); } catch {} refreshPanels(); };
-  return h('div', { class: 'card welcome' }, h('button', { class: 'x', onclick: close }, '×'),
-    h('h3', null, 'Welcome to Atlas Forge'),
-    h('div', { class: 'tips' },
-      h('p', null, h('b', null, 'Explore'), ' — colour the real world by hundreds of maps. Tap anything for details; 🔍 finds any place.'),
-      h('p', null, h('b', null, 'Draw'), ' — paint your own districts from grid cells, provinces or US counties, like Districtr.'),
-      h('p', null, h('b', null, 'Simulate'), ' — press ▶ and history unfolds: wars, alliances, rebellions, elections.'),
-      h('p', null, h('b', null, 'God mode'), ' — repaint borders, rewrite data, declare wars, drop meteors.')),
-    btn('Got it', close, 'primary wide'));
+  const go = (fn) => () => { close(); fn(); };
+  const act = (ic, title, text, fn) => h('button', { class: 'act', onclick: go(fn) }, h('span', { class: 'ic', html: ICON[ic] }), h('span', null, h('b', null, title), h('small', null, text)));
+  return h('div', { class: 'card welcome' }, h('button', { class: 'x', 'aria-label': 'Close', onclick: close }, '×'),
+    h('h3', null, 'What do you want to do?'),
+    act('search', 'Look something up', 'Find any country, province, county or city', openSearch),
+    act('layers', 'Colour the world by data', 'Population, wealth, politics, climate and 300 more', openThemeBrowser),
+    act('draw', 'Draw election districts', 'Paint your own map from real precincts, counties or local areas', () => setMode('draw')),
+    act('sim', 'Run world history', 'Press play and watch wars, alliances and elections unfold', () => setMode('sim')),
+    act('edit', 'Change the world', 'Move borders, edit data, start wars, drop disasters', () => setMode('edit')),
+    h('p', { class: 'muted small' }, 'Tap any place on the map for details. Pinch to zoom, drag to move.'));
 }
 const LEVEL_NAMES = ['Nations', 'States', 'Districts', 'Sub-districts', 'Localities', 'Villages'];
 let coverage = null;
@@ -339,7 +367,7 @@ export function openLayers() {
 }
 
 // ------------------------------------------------------------------ info card
-export function showInfo() { infoOpen = true; if (app.sheet === 'peek') setSheet('half'); refreshPanels(); $('#sheetBody').scrollTop = 0; }
+export function showInfo() { infoOpen = true; app.tappedOnce = true; if (app.sheet === 'peek') setSheet('half'); refreshPanels(); $('#sheetBody').scrollTop = 0; }
 export function hideInfo() { infoOpen = false; select(null); }
 function spark(values, color, w = 140, hgt = 34) {
   const c = h('canvas', { width: w * 2, height: hgt * 2, class: 'spark', style: { width: w + 'px', height: hgt + 'px' } });
@@ -605,7 +633,7 @@ function renderDraw(b) {
     btn('＋', () => openModal('New district plan', newPlanForm(true)), 'sq'),
     btn('⋯', () => openPlanMenu(p), 'sq')));
   if (app.stats) b.append(districtStrip(p, app.stats));
-  b.append(seg([['paint', 'Paint'], ['pop', 'People'], ['coi', 'Places'], ['layers', 'Layers'], ['eval', 'Evaluate']], app.drawTab, (v) => { const was = app.drawTab; app.drawTab = v; if (was === 'coi' || v === 'coi') refresh(); refreshPanels(); }));
+  b.append(seg([['paint', 'Paint'], ['pop', 'Population'], ['coi', 'Communities'], ['layers', 'Layers'], ['eval', 'Check']], app.drawTab, (v) => { const was = app.drawTab; app.drawTab = v; if (was === 'coi' || v === 'coi') refresh(); refreshPanels(); }));
   const st = app.stats;
   if (app.drawTab === 'pop') return renderPopTab(b, p, st);
   if (app.drawTab === 'layers') return renderLayersTab(b, p);
@@ -834,10 +862,10 @@ function newPlanForm(inModal) {
     realSel.innerHTML = ''; realSel.append(h('option', { value: -1 }, 'Blank — draw it yourself'), ...m.plans.map((pl, k) => h('option', { value: k }, `${pl.label} (${pl.n} districts)`)));
     st.real = -1;
     const cong = m.plans.find((pl) => /^Congress/.test(pl.label)); if (cong) { st.n = cong.n; nInput.value = cong.n; }
-    st.name = `${m.title} plan`; nameIn.value = st.name;
+    if (!st.custom && st.unit === 'precincts') { st.name = `${m.title} plan`; nameIn.value = st.name; }
   };
   packList().then((list) => { packs = list; packSel.append(...list.map((m) => h('option', { value: m.state, selected: m.state === st.pack }, m.title))); showPack(); });
-  const nameIn = h('input', { value: st.name, oninput: (e) => { st.name = e.target.value; } });
+  const nameIn = h('input', { value: st.name, oninput: (e) => { st.name = e.target.value; st.custom = true; } });
   const pctRows = h('div', null, h('label', null, 'State', packSel), packInfo, h('label', null, 'Start from', realSel));
   // admin areas of any country, any level
   // levels split by state (US tracts / block groups) draw one state at a time
@@ -849,7 +877,7 @@ function newPlanForm(inModal) {
     const m = curLevel(); if (!m) { admNote.textContent = ''; return; }
     const part = m.byState ? m.parts.find((p) => 'L:' + p.key === st.adm) : null, count = part ? part.count : m.count;
     admNote.textContent = `${count.toLocaleString()} areas · ${m.source}` + (count > 60000 ? ' — too many to draw on a phone; pick a higher level' : '');
-    if (st.unit === 'admin') { st.name = `${part ? part.title : m.title} ${m.levelName} plan`; nameIn.value = st.name; }
+    if (st.unit === 'admin' && !st.custom) { st.name = `${part ? part.title : m.title} ${m.levelName} plan`; nameIn.value = st.name; }
   };
   const fillParts = () => {
     const m = curLevel(); admPart.innerHTML = '';
@@ -868,8 +896,8 @@ function newPlanForm(inModal) {
   const randRow = toggle('Start with an automatic random plan', false, (v) => { st.random = v; });
   const status = h('div', { class: 'muted small' });
   const f = h('div', { class: 'form' },
-    !inModal ? h('div', { class: 'hero' }, h('h3', null, 'Draw your own districts'), h('p', { class: 'muted' }, 'Use real US precincts with real election results — like Districtr — or draw districts anywhere on Earth from grid cells, provinces or counties. World plans decide seats when that country votes in the simulation.')) : null,
-    h('label', null, 'Build districts from', (() => { const sel = h('select', { onchange: (e) => { st.unit = e.target.value; pctRows.style.display = st.unit === 'precincts' ? '' : 'none'; admRows.style.display = st.unit === 'admin' ? '' : 'none'; if (st.unit === 'admin') admInfo(); worldRows.style.display = ['precincts', 'counties', 'admin'].includes(st.unit) ? 'none' : ''; } }, [['precincts', UNIT_TYPES.precincts], ['admin', 'Real local areas — any country, levels 1–5'], ['cells', UNIT_TYPES.cells], ['provinces', UNIT_TYPES.provinces], ['counties', UNIT_TYPES.counties]].map(([k, l]) => h('option', { value: k, selected: k === st.unit }, l)));
+    !inModal ? h('div', { class: 'hero' }, h('h3', null, 'Draw your own districts'), h('p', { class: 'muted' }, 'Choose what to build them from and how many you want, then paint them on the map.')) : null,
+    unitCards(st), h('label', { class: 'hide-sel' }, 'Build districts from', (() => { const sel = h('select', { id: 'unitSel', onchange: (e) => { st.unit = e.target.value; pctRows.style.display = st.unit === 'precincts' ? '' : 'none'; admRows.style.display = st.unit === 'admin' ? '' : 'none'; if (st.unit === 'admin') admInfo(); else if (!st.custom) { const pk = packs && packs.find((x) => x.state === st.pack); st.name = st.unit === 'precincts' ? `${pk ? pk.title : 'Precinct'} plan` : ({ counties: 'US counties plan', provinces: 'Provinces plan', cells: 'World grid plan' })[st.unit] || st.name; nameIn.value = st.name; } worldRows.style.display = ['precincts', 'counties', 'admin'].includes(st.unit) ? 'none' : ''; } }, [['precincts', UNIT_TYPES.precincts], ['admin', 'Real local areas — any country, levels 1–5'], ['cells', UNIT_TYPES.cells], ['provinces', UNIT_TYPES.provinces], ['counties', UNIT_TYPES.counties]].map(([k, l]) => h('option', { value: k, selected: k === st.unit }, l)));
       if (app.admPreset) setTimeout(() => { sel.value = 'admin'; sel.dispatchEvent(new Event('change')); }, 0); return sel; })()),
     pctRows, admRows, worldRows,
     h('label', null, 'Name', nameIn),
@@ -902,6 +930,21 @@ function newPlanForm(inModal) {
       } catch (err) { status.textContent = err.message; toast(err.message, 5000); button.disabled = false; }
     }, 'primary wide'));
   return f;
+}
+// The unit choice as big, described options (the select stays as the source of truth).
+const UNIT_INFO = [
+  ['precincts', 'US voting precincts', 'Real election results for 28 states, closest to Districtr'],
+  ['admin', 'Local areas anywhere', 'Any country’s states, districts or towns, or US census tracts and block groups'],
+  ['counties', 'US counties', 'All 3,221 counties with census population'],
+  ['provinces', 'Provinces and states', 'For any country or the whole world'],
+  ['cells', 'World grid', 'Free-form squares; these plans decide the simulation’s elections'],
+];
+function unitCards(st) {
+  const wrap = h('div', { class: 'ucards', role: 'radiogroup', 'aria-label': 'Build districts from' });
+  const draw = () => { wrap.querySelectorAll('button').forEach((b) => { const on = b.dataset.u === st.unit; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }); };
+  for (const [u, t, d] of UNIT_INFO) wrap.append(h('button', { 'data-u': u, role: 'radio', class: st.unit === u ? 'on' : '', onclick: () => { const sel = document.getElementById('unitSel'); if (sel) { sel.value = u; sel.dispatchEvent(new Event('change')); } st.unit = u; draw(); } }, h('b', null, t), h('small', null, d)));
+  setTimeout(() => { if (st.unit === 'admin' || document.getElementById('unitSel')?.value === 'admin') { st.unit = 'admin'; } draw(); }, 10);
+  return h('div', null, h('div', { class: 'sec-t' }, 'Build districts from'), wrap);
 }
 export function startLevelPlan(iso, level, key) {
   if (key && !key.includes(':')) { app.precinctPreset = key; setMode('draw'); openModal('New district plan', newPlanForm(true)); return; } // a precinct pack
@@ -967,10 +1010,12 @@ export function refreshStats() { if (app.mode === 'draw' && !document.activeElem
 // ------------------------------------------------------------------ god mode
 function renderEdit(b) {
   const W = app.W;
-  b.append(seg([['borders', 'Borders'], ['data', 'Data'], ['disaster', 'Disaster'], ['nations', 'Nations'], ['diplomacy', 'Diplo']], ['release', 'capital'].includes(app.editTool) ? 'nations' : app.editTool, (v) => {
+  b.append(seg([['borders', 'Borders'], ['data', 'Data'], ['disaster', 'Disasters'], ['nations', 'Nations'], ['diplomacy', 'Diplomacy']], ['release', 'capital'].includes(app.editTool) ? 'nations' : app.editTool, (v) => {
     app.editTool = v; app.tool = (v === 'borders' && app.paintChosen) || v === 'data' ? 'brush' : 'pan';
     if (v === 'data') autoTheme(); refreshPanels(); }));
   const et = app.editTool;
+  const ABOUT = { borders: 'Give land to any nation by painting it.', data: 'Paint new values for development, population, politics or terrain.', disaster: 'Pick a disaster, then tap where it strikes.', nations: 'Tap a nation to rename it, recolour it, change its government or split it.', diplomacy: 'Tap a nation, then set how it gets on with others, or start a war.' };
+  if (ABOUT[et]) b.append(h('p', { class: 'about' }, ABOUT[et]));
   if (et === 'borders') {
     const n = W.nations[app.paintNation];
     b.append(h('div', { class: 'paintwith' }, h('span', null, 'Paint land for'), h('button', { class: 'btn' + (app.paintChosen ? '' : ' primary'), onclick: () => chooseNation('Paint land for…', (id) => { app.paintNation = id; app.paintChosen = true; app.tool = 'brush'; refreshPanels(); }, true, true) }, !app.paintChosen ? 'Choose a nation' : n ? [dot(n.color), n.name] : [dot([90, 90, 90]), 'Unclaimed (erase)'], ' ▾')));
@@ -1140,7 +1185,8 @@ function openMenu() {
       btn('💾 Save', async () => { await putSlot('w_' + Date.now(), serialize(W)); toast('Saved'); openMenu(); }, 'primary'),
       btn('⬇ Export file', async () => { toast('Packing…'); const b = await exportBlob(W); saveFile((W.name || 'world').replace(/\W+/g, '_') + '.atlas', b); }),
       btn('⬆ Import file', () => fileIn.click()), fileIn,
-      btn('🌍 New world', () => openNewWorld())),
+      btn('🌍 New world', () => openNewWorld()),
+      btn('Show the start screen', () => { try { localStorage.removeItem('af_welcome'); } catch {} closeModal(); setMode('explore'); setSheet('half'); refreshPanels(); })),
     h('div', { class: 'sec-t' }, 'Saved worlds'), slots,
     h('details', { class: 'sec' }, h('summary', null, 'About & data'), h('p', { class: 'muted small' }, `Atlas Forge — draw districts and run history on a ${W.Wd}×${W.Hd} grid of the real Earth. Borders, provinces, cities, terrain: Natural Earth (public domain). US counties and populations: US Census Bureau. Country population/GDP: Natural Earth (2019–2021 estimates). Cell populations are modelled from those figures.`))));
 }

@@ -347,3 +347,25 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .dstrip .db.on i { opacity: 1; box-shadow: 0 0 0 1.5px var(--text); }
 .dstrip .db.bad i { background: repeating-linear-gradient(45deg, var(--c) 0 4px, color-mix(in srgb, var(--c) 55%, #000) 4px 7px); }
 .dstripw small { font-size: 12px; display: block; margin-top: 4px; }
+/* hint: what a tap or drag does right now */
+#hint { position: absolute; top: calc(var(--top) + 6px); left: 50%; transform: translateX(-50%); max-width: calc(100% - 132px); z-index: 4; pointer-events: none;
+  background: rgba(13, 23, 32, .9); color: var(--text); border: 1px solid var(--line2); border-radius: 16px; padding: 6px 12px; font-size: 14px; font-weight: 500; text-align: center; line-height: 1.25; box-shadow: 0 3px 12px rgba(0,0,0,.35); }
+#hint[hidden] { display: none; }
+/* start screen: actions, not a feature tour */
+.welcome { border-color: rgba(217,164,65,.45); }
+.act { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 10px 6px; border-bottom: 1px solid var(--line); }
+.act:last-of-type { border-bottom: 0; }
+.act .ic { width: 38px; height: 38px; border-radius: var(--r-m); background: var(--panel3); display: grid; place-items: center; color: var(--accent2); flex: none; }
+.act .ic svg { width: 21px; height: 21px; }
+.act b { display: block; font-size: 16px; font-weight: 600; }
+.act small { display: block; color: var(--muted); font-size: 13px; }
+.about { color: var(--muted); font-size: 14px; margin: 8px 2px; }
+/* new plan: unit choice as cards */
+.hide-sel { display: none !important; }
+.ucards { display: flex; flex-direction: column; gap: 6px; }
+.ucards button { text-align: left; padding: 10px 12px; border-radius: var(--r-m); background: var(--panel2); border: 1px solid var(--line); }
+.ucards button b { display: block; font-size: 15px; font-weight: 600; }
+.ucards button small { display: block; color: var(--muted); font-size: 13px; margin-top: 1px; }
+.ucards button.on { border-color: var(--accent); background: rgba(217,164,65,.12); }
+.ucards button.on b { color: var(--accent2); }
+@media (min-width: 760px) { #hint { left: calc(50% + 230px); max-width: calc(100% - 600px); } }
