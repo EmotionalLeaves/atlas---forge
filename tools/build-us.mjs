@@ -198,11 +198,12 @@ function loadElections(dir) {
   const out = [];
   if (!dir || !fs.existsSync(dir)) return out;
   for (const f of fs.readdirSync(dir).filter((x) => /^\d{4}.*\.csv$/i.test(x)).sort().reverse()) {
-    const lines = fs.readFileSync(path.join(dir, f), 'utf8').trim().split(/\r?\n/), H = lines[0].split(',').map((x) => x.replace(/"/g, '').trim().toLowerCase());
+    const csv = (L) => { const out = []; let cur = '', q = false; for (const ch of L) { if (ch === '"') q = !q; else if (ch === ',' && !q) { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out; };
+    const lines = fs.readFileSync(path.join(dir, f), 'utf8').trim().split(/\r?\n/), H = csv(lines[0]).map((x) => x.trim().toLowerCase());
     const iD = H.indexOf('votes_dem'), iR = H.indexOf('votes_gop'), iF = H.findIndex((x) => x === 'county_fips' || x === 'combined_fips' || x === 'fips');
     if (iD < 0 || iR < 0 || iF < 0) continue;
     const m = new Map();
-    for (const L of lines.slice(1)) { const c = L.split(','); const fp = String(c[iF]).replace(/"/g, '').replace(/\.0$/, '').padStart(5, '0'); const d = +c[iD], r = +c[iR]; if (isFinite(d) && isFinite(r)) m.set(fp, [d, r]); }
+    for (const L of lines.slice(1)) { const c = csv(L); const fp = String(c[iF]).trim().replace(/\.0$/, '').padStart(5, '0'); const d = +c[iD], r = +c[iR]; if (isFinite(d) && isFinite(r)) m.set(fp, [d, r]); }
     const yr = f.slice(0, 4); out.push({ key: 'PRES' + yr.slice(2), label: `President ${yr} (county result, estimated)`, m });
   }
   return out;

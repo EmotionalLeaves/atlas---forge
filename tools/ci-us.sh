@@ -81,5 +81,5 @@ ls -la "$US/elec"
 echo "== tract, block group and voting district packs"
 node --max-old-space-size=12000 "$ROOT/tools/build-us.mjs" "$RAW/earcut/src/earcut.js" "$US/tract" "$US/bg" "$US/pl" "$OUT" "$RAW/fpop.bin" "$US/vtd" "$US/elec"
 echo "levels now: $(ls "$OUT" | wc -l) files, $(du -sh "$OUT" | cut -f1)"
-# succeed only when both US levels made it in (so CI does not cache a partial build)
-node -e 'const m=require(process.argv[1]);const u=m.filter(x=>x.iso==="USA"&&x.byState);process.exit(u.length>=2&&u.every(x=>x.parts.filter(p=>p.pop>0).length>=50)?0:1)' "$OUT/levels.json"
+# succeed only when all three US levels made it in (CA, HI and OR have no voting districts) (so CI does not cache a partial build)
+node -e 'const m=require(process.argv[1]);const u=m.filter(x=>x.iso==="USA"&&x.byState);process.exit(u.length>=3&&u.every(x=>x.parts.filter(p=>p.pop>0).length>=(x.level===5?45:50))?0:1)' "$OUT/levels.json"
