@@ -4,6 +4,7 @@ import { saveSettings, applyMapStyle } from './app.js';
 import { BASEMAPS } from './basemap.js';
 import { app, setTheme, refresh, theme, plan, select, undoRedo, scheduleStats, computePlanStats, rebuildCatalog, setWorld, step, autosave, viewHistory, restoreHistory, usePack, ensurePlanPack } from './app.js';
 import { packList } from './precincts.js';
+import { startGame, resolveEvent, endGame, POLICIES, rankOf } from './game.js';
 import { rel, setRel, computeAggregates, computeAdjacency, newNation, cellLngLat, addNews, GOVS, prodOf, MAXN, warBetween } from './world.js';
 import { declareWar, endWar, annex, DISASTERS } from './sim.js';
 import { recomInput, newPlan, setDistrictCount, autoFill, randomPlan, UNIT_TYPES, planStats, unitCenter, PARENT_NAME, PARENT_PLURAL, planSplits, importCSV, applyRealPlan, planLayer, PRECINCT_COLORS, defaultElection } from './plans.js';
@@ -378,12 +379,61 @@ function summaryCard(S) {
     S.gainers.length ? h('div', { class: 'chgs' }, h('small', null, 'Grew (cells)'), list(S.gainers)) : null,
     S.losers.length ? h('div', { class: 'chgs' }, h('small', null, 'Shrank (cells)'), list(S.losers)) : null);
 }
+// ---- play-as-a-nation ----
+function gameCard() {
+  const W = app.W, G = W.game, n = W.nations[G.nation];
+  if (G.ended) return h('div', { class: 'card slim game ' + (G.ended.won ? 'won' : 'lost') },
+    h('h3', null, G.ended.won ? '🏆 Victory' : 'Game over'), h('p', null, G.ended.text), row('Final score', G.score.toLocaleString()),
+    h('div', { class: 'btns' }, btn('Keep watching history', () => { endGame(W); refreshPanels(); }), btn('Play again', () => { endGame(W); openStartGame(); }, 'primary')));
+  const card = h('div', { class: 'card slim game' },
+    h('div', { class: 'gh' }, dot(n.color), h('b', null, n.name), h('span', { class: 'muted small' }, `${n.gov} · score ${G.score.toLocaleString()}`),
+      h('button', { class: 'linkbtn', onclick: () => { select({ cell: n.capital, nation: n.id }); zoomToNation(n); showInfo(); } }, 'View')),
+    h('div', { class: 'kvrow' },
+      h('div', { class: 'kv' }, h('span', null, 'Approval'), h('span', { class: 'bar' }, h('i', { style: { width: pct(G.approval), background: G.approval > 0.5 ? '#5fbf7a' : G.approval > 0.3 ? '#e8b448' : '#e2583c' } }))),
+      h('div', { class: 'kv' }, h('span', null, 'Stability'), h('span', { class: 'bar' }, h('i', { style: { width: pct(n.stab), background: n.stab > 0.5 ? '#5fbf7a' : n.stab > 0.28 ? '#e8b448' : '#e2583c' } })))),
+    h('div', { class: 'kvrow' }, row('Economy rank', '#' + rankOf(W, n, 'gdp')), row('Military rank', '#' + rankOf(W, n, 'mil'))));
+  if (G.events.length) {
+    const e = G.events[0];
+    card.append(h('div', { class: 'event' }, h('small', null, dateOf(e.m, W.startYear)), h('h4', null, e.title), h('p', null, e.text),
+      h('div', { class: 'btns' }, e.options.map((o) => btn(o.label, () => { const out = resolveEvent(W, o.act); app.aggStamp++; rebuildCatalog(); refresh(); toast(out, 4000); refreshPanels(); }, o.act === 'war' ? 'danger' : '')))));
+  }
+  // budget
+  const B = G.budget, sliders = h('div', { class: 'budget' });
+  const draw = () => { sliders.innerHTML = ''; for (const [k, P] of Object.entries(POLICIES)) sliders.append(h('label', { class: 'slider' }, P.label, h('input', { type: 'range', min: 0, max: 100, step: 5, value: B[k], title: P.desc, oninput: (e) => setBudget(k, +e.target.value) }), h('b', null, B[k] + '%'))); };
+  const setBudget = (k, v) => { // keep the total at 100%
+    const others = Object.keys(B).filter((x) => x !== k), rest = 100 - v, cur = others.reduce((a, x) => a + B[x], 0) || 1;
+    B[k] = v; let acc = 0; others.forEach((x, i) => { B[x] = i === others.length - 1 ? rest - acc : Math.round(B[x] / cur * rest / 5) * 5; acc += B[x]; });
+    for (const x of others) if (B[x] < 0) { B[k] += B[x]; B[x] = 0; }
+    [...sliders.querySelectorAll('input')].forEach((inp, i) => { const key = Object.keys(POLICIES)[i]; if (key !== k) inp.value = B[key]; inp.nextSibling.textContent = B[key] + '%'; });
+  };
+  draw();
+  card.append(h('details', { class: 'sec', open: !G.events.length }, h('summary', null, 'Budget priorities'), sliders));
+  card.append(h('details', { class: 'sec' }, h('summary', null, `Goals (${G.goals.filter((g) => g.done).length}/${G.goals.length})`),
+    G.goals.map((g) => h('div', { class: 'check ' + (g.done ? 'ok' : 'no') }, h('b', null, g.done ? '✓' : '○'), h('span', null, g.text), h('small', null, g.done ? dateOf(g.done, W.startYear) : '')))));
+  if (G.log.length) card.append(h('details', { class: 'sec' }, h('summary', null, 'Your decisions'), G.log.slice(0, 12).map((l) => h('div', { class: 'small' }, h('b', null, l.title), ' — ', l.out))));
+  card.append(h('button', { class: 'linkbtn', onclick: () => { if (confirm('Stop playing as this nation? History keeps running.')) { endGame(W); refreshPanels(); } } }, 'Stop playing'));
+  return card;
+}
+export function openStartGame() {
+  const W = app.W; let pick = 0; const list = h('div', { class: 'tlist' });
+  const draw = (q = '') => {
+    list.innerHTML = ''; q = q.toLowerCase();
+    W.nations.filter((n) => n && n.alive && n.cells > 3 && n.name.toLowerCase().includes(q)).sort((a, b) => b.pop - a.pop).slice(0, 150).forEach((n) => list.append(
+      h('button', { class: 'titem', onclick: () => { closeModal(); startGame(W, n.id); app.mode !== 'sim' && setMode('sim'); select({ cell: n.capital, nation: n.id }); zoomToNation(n); app.sel = null; refreshPanels(); toast(`You lead ${n.name}. Press ▶ — decisions will come to you.`, 5000); } },
+        dot(n.color), h('span', null, n.name, h('small', { class: 'block' }, `${n.gov} · economy #${rankOf(W, n, 'gdp')} · ${fmt(n.pop)} people`)), h('small', null, rankOf(W, n, 'gdp') <= 10 ? 'Easy' : rankOf(W, n, 'gdp') <= 50 ? 'Medium' : 'Hard'))));
+  };
+  const search = h('input', { class: 'search', placeholder: 'Search nations…', oninput: () => draw(search.value) });
+  draw();
+  openModal('Choose your nation', h('div', null, h('p', { class: 'muted small' }, 'Lead one nation through history. Set budget priorities, answer crises, make or break alliances, and reach your goals before you lose power.'), search, list));
+}
 function renderSim(b) {
   const W = app.W;
   b.append(h('div', { class: 'simbar' },
     h('button', { class: 'play' + (app.running ? ' on' : ''), 'aria-label': app.running ? 'Pause' : 'Play', onclick: () => { if (app.histOwner) viewHistory(null); setRunning(!app.running); } }, app.running ? '❚❚' : '▶'),
     seg([[1, '1×'], [2, '4×'], [3, '12×'], [4, 'Max']], app.speed, (v) => { app.speed = v; if (!app.running) setRunning(true); else refreshPanels(); }),
     h('button', { class: 'btn', onclick: () => step(12) }, '+1 yr')));
+  if (W.game) b.append(gameCard());
+  else b.append(btn('👑 Play as a nation…', openStartGame, 'wide'));
   if (app.summary && !app.running) b.append(summaryCard(app.summary));
   b.append(worldStats());
   const T = W.timeline;

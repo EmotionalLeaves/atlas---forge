@@ -754,6 +754,7 @@ function simLoop(t) {
   if (!n) return;
   app.aggStamp++; dropWorldUndo();
   if (owner) { rebuildCatalogLite(); pendingOwner = true; }
+  if (app.W.game && (app.W.game.events.length || app.W.game.ended) && app.running) { UI.setRunning(false); setTimeout(() => UI.toast(app.W.game.ended ? app.W.game.ended.text : 'A decision needs you'), 50); }
   // recolour at a pace the device can afford; maps that the sim can't change only need it when borders move
   const th = theme(), gap = Math.max(250, refreshCost * 8);
   if (t - recolorAt > gap && (pendingOwner || !th.static)) {

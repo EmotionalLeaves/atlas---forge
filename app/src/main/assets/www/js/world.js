@@ -116,7 +116,7 @@ export function computeAggregates(W) {
     if (C[o]) { let a = Math.atan2(SY[o], SX[o]); if (a < 0) a += 2 * Math.PI; n.cx = a / (2 * Math.PI) * Wd; n.cy = SZ[o] / C[o]; }
     const govMul = { Republic: 1, Monarchy: 1, Autocracy: 1.25, Junta: 1.4, Provisional: 0.8 }[n.gov] || 1;
     n.mil = Math.pow(Math.max(1, n.gdp), 0.62) * Math.pow(Math.max(1, n.pop), 0.18) * govMul * (1 - 0.5 * n.exh) / 100;
-    if (n.alive && !C[o]) { n.alive = false; }
+    if (n.alive && !C[o]) { n.alive = false; n.bloc = 0; }
     if (!n.alive && C[o]) n.alive = true;
     if (n.alive && (n.capital < 0 || owner[n.capital] !== o)) n.capital = TOP[o];
   }

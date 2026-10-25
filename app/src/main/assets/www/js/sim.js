@@ -1,6 +1,7 @@
 // The world simulation: one tick = one month.
 import { recordTimeline, LEAN_BINS, MAXN, HAB, GOVS, rel, setRel, pairKey, computeAggregates, computeAdjacency, snapshot, addNews, warBetween, newNation, cellLngLat } from './world.js';
 import { clamp, vnoise, hsl, rebelName, blocName } from './util.js';
+import { gameTick } from './game.js';
 
 const GROW = Float32Array.from({ length: 1025 }, (_, k) => { const d = k / 1024; return 0.026 * (1 - d) * (1 - d) - 0.0042 * d + 0.0012; }); // demographic transition
 const GOV_STAB = { Republic: 0.04, Monarchy: 0.05, Autocracy: 0.02, Junta: -0.06, Provisional: -0.12 };
@@ -9,6 +10,7 @@ export function tick(W) {
   const r = W.rng, { land, owner, pop, dev, lean, Wd, Hd } = W, terr = W.terrain, flags = W.D.cells.flags;
   const nations = W.nations, nn = nations.length;
   const ev = { owner: false };
+  if (W.game) gameTick(W);
   W.month++;
   const warOf = new Uint8Array(nn); for (const w of W.wars) { warOf[w.a] = 1; warOf[w.b] = 1; }
   const stab = new Float32Array(nn), devAvg = new Float32Array(nn);
@@ -80,7 +82,7 @@ export function tick(W) {
 }
 
 function strength(W, o) {
-  const n = W.nations[o]; let s = n.mil;
+  const n = W.nations[o]; let s = n.mil * (n.armyBonus || 1);
   for (const w of W.wars) if (w.a === o || w.b === o) s *= 1; // placeholder for future modifiers
   return Math.max(0.01, s);
 }
@@ -279,8 +281,8 @@ function diplomacy(W, warOf) {
     const nb = W.neighbors[o]; if (!nb || !nb.length) continue;
     const q = nb[Math.floor(r() * nb.length)], B = nations[q]; if (!B.alive) continue;
     if (rel(W, o, q) > -30 || W.truce[pairKey(o, q)] > W.month || (A.bloc && A.bloc === B.bloc) || warBetween(W, o, q)) continue;
-    let defense = B.mil; if (B.bloc) for (const n of nations) if (n && n.alive && n.bloc === B.bloc && n.id !== q) defense += n.mil * 0.5;
-    if (A.mil < defense * 1.15) continue;
+    let defense = B.mil * (B.armyBonus || 1); if (B.bloc) for (const n of nations) if (n && n.alive && n.bloc === B.bloc && n.id !== q) defense += n.mil * 0.5;
+    if (A.mil * (A.armyBonus || 1) < defense * 1.15) continue;
     const govBias = A.gov === 'Republic' ? 0.6 : A.gov === 'Junta' || A.gov === 'Autocracy' ? 1.6 : 1;
     if (r() < 0.025 * aggr * govBias) declareWar(W, o, q);
   }

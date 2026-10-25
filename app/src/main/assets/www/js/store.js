@@ -46,6 +46,7 @@ export function serialize(W) {
     lean: onLand(W, W.lean, Float32Array), lean0: onLand(W, W.lean0, Float32Array), terrain: onLand(W, W.terrain, Uint8Array), custom,
     plans: W.plans.map((p) => ({ ...p, assign: p.unit === 'cells' ? onLand(W, p.assign, Int16Array) : p.assign.slice() })),
     aliveCount: W.nations.filter((n) => n && n.alive).length,
+    game: W.game || null,
     timeline: W.timeline ? { start: W.timeline.start, key: W.timeline.key, deltas: W.timeline.deltas } : null,
   };
 }
@@ -57,7 +58,7 @@ export function deserialize(D, S) {
   W.rng.setState(S.rng);
   W.nations = S.nations.map((n) => n && { ...n });
   W.blocs = S.blocs; W.wars = S.wars; W.truce = S.truce; W.news = S.news; W.formulas = S.formulas || [];
-  W.mood.fill(0); W.mood.set(S.mood);
+  W.mood.fill(0); W.mood.set(S.mood); W.game = S.game || null;
   W.rel.fill(0); const nn = S.nn; for (let a = 0; a < nn; a++) for (let b = 0; b < nn; b++) W.rel[a * MAXN + b] = S.rel[a * nn + b];
   W.owner.fill(0); fromLand(W, S.owner, W.owner); fromLand(W, S.pop, W.pop); fromLand(W, S.pop0, W.pop0); fromLand(W, S.dev, W.dev); fromLand(W, S.lean, W.lean); if (S.lean0) fromLand(W, S.lean0, W.lean0); else W.lean0.set(W.lean); fromLand(W, S.terrain, W.terrain);
   W.custom = {}; for (const [k, v] of Object.entries(S.custom || {})) { const a = new Float32Array(W.N); fromLand(W, v, a); W.custom[k] = a; }

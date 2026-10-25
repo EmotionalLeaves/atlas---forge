@@ -263,3 +263,13 @@ td.maj { color: var(--accent2); font-weight: 700; }
 #mapLegend .ml-v { display: flex; justify-content: space-between; font-size: 10px; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .pbar { height: 6px; background: #1e2633; border-radius: 3px; overflow: hidden; margin: 8px 0 4px; }
 .pbar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+.game { border-color: rgba(242,181,68,.55); }
+.game .gh { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.game .gh b { font-size: 16px; }
+.game .gh .linkbtn { margin-left: auto; }
+.game .event { background: #20283a; border-radius: 12px; padding: 10px; margin: 8px 0; border-left: 3px solid var(--accent); }
+.game .event h4 { margin: 2px 0 4px; font-size: 15px; }
+.game .event p { margin: 0 0 4px; font-size: 13px; color: #cfd6e2; }
+.game .event small { color: var(--muted); font-size: 11px; }
+.game.won { border-color: var(--good); } .game.lost { border-color: var(--danger); }
+.budget .slider { margin: 4px 0; }
