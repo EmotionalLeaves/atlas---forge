@@ -379,11 +379,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 @media (min-width: 760px) { #hint { left: calc(50% + 230px); max-width: calc(100% - 600px); } }
 .linkbtn.back { font-size: 15px; text-decoration: none; margin: 8px 0 2px; display: inline-block; }
 /* full screen: only the map, the tool bar and the hint */
-body.full #tabs, body.full #sheet, body.full #floating .fab:not(#fsBtn), body.full #attr, body.full #top > :not(.title) { display: none; }
-body.full #top { background: none; right: 70px; }
-body.full #floating { top: calc(10px + env(safe-area-inset-top)); }
-body.full #hint { top: calc(12px + env(safe-area-inset-top)); max-width: calc(100% - 84px); left: calc(50% - 24px); }
-body.full #dock { bottom: calc(14px + env(safe-area-inset-bottom)) !important; }
+body.full #sheet, body.full #floating .fab:not(#fsBtn), body.full #attr { display: none; }
 #fsBtn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 /* toggles inside forms keep their switch layout */
 .form label.tog, label.tog { display: inline-flex; align-items: center; gap: 8px; margin: 6px 0; color: var(--text); }
@@ -393,15 +389,76 @@ body.full #dock { bottom: calc(14px + env(safe-area-inset-bottom)) !important; }
 #dock .tool { flex: 0 0 52px; }
 @media (max-width: 400px) {
   #dock { gap: 5px; padding: 5px; }
-  #dock .tool { flex: 0 0 38px; padding: 4px 0; }
-  #dock .tool small { font-size: 10px; }
-  #dock .ti svg { width: 20px; height: 20px; }
-  .seal { width: 46px; height: 46px; } .seal::before { inset: 7px; } .seal b { font-size: 15px; } .seal small { font-size: 9px; }
-  .undo2 button { width: 32px; } .stepper button { width: 30px; }
+  #dock .tool { flex: 0 0 48px; padding: 4px 0; }
+  #dock .tool small { font-size: 11px; }
+  .seal { width: 50px; height: 50px; } .seal::before { inset: 7px; } .seal b { font-size: 16px; } .seal small { font-size: 9px; }
 }
 .places .titem > span:first-child { flex: 1; min-width: 0; }
 /* taps on the fixed bars: no pan gesture can steal them, and the press shows straight away */
-#tabs, #tabs button, #floating .fab, #top button, #dock .seal, #dock .undo2 button, #dock .stepper button { touch-action: none; }
+#tabs, #tabs button, #floating .fab, #top button, #dock .seal, #dock .dxb { touch-action: none; }
 button { touch-action: manipulation; }
 #tabs button:active { background: rgba(217,164,65,.10); }
 #tabs button:active .ic, #dock button:active, #top button:active { transform: scale(.94); }
+
+/* ---------- UX overhaul: bigger targets, clearer controls ---------- */
+.round { width: 44px; height: 44px; }
+.fab { width: 44px; height: 44px; }
+.title { min-height: 44px; justify-content: center; background: rgba(19, 32, 43, .88); border: 1px solid var(--line); box-shadow: 0 2px 10px rgba(0,0,0,.35); text-shadow: none; padding: 5px 12px 5px 10px; }
+.themechip { min-height: 44px; }
+.seg button { min-height: 40px; }
+.btn { min-height: 42px; }
+.btn.sm { min-height: 34px; }
+.btn .ic svg { width: 18px; height: 18px; }
+.titem { min-height: 50px; }
+.places .chev { flex: none !important; margin-left: auto; padding-left: 8px; }
+.x { width: 40px; height: 40px; right: 4px; top: 2px; }
+.mhead .x { top: 6px; }
+/* the bar above the dock: undo / redo and brush size */
+.dockA { position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); display: flex; justify-content: space-between; align-items: center; gap: 8px; pointer-events: none; }
+.dockA > * { pointer-events: auto; }
+.dx { display: flex; align-items: center; gap: 6px; background: rgba(19, 32, 43, .94); border: 1px solid var(--line2); border-radius: 24px; padding: 3px; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+.dxb { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: var(--text); }
+.dxb:disabled { opacity: .3; }
+.dxb svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.dx.size { padding: 3px 12px 3px 6px; flex: 0 1 220px; min-width: 0; }
+.dx.size input { flex: 1; min-width: 60px; padding: 0; height: 36px; background: none; border: 0; accent-color: var(--accent); }
+.dx.size b { font-size: 13px; min-width: 16px; text-align: right; font-variant-numeric: tabular-nums; }
+.bdot { width: 34px; height: 34px; display: grid; place-items: center; flex: none; }
+.bdot i { display: block; border-radius: 50%; background: var(--accent2); opacity: .9; max-width: 30px; max-height: 30px; }
+.sealw { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: none; }
+.sealw > small { font-size: 10px; color: var(--muted); line-height: 1; }
+.dval { display: flex; flex-direction: column; align-items: flex-end; padding: 0 8px; min-width: 0; flex: 0 1 auto; }
+.dval small { font-size: 11px; color: var(--muted); }
+.dval b { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px; }
+/* Edit: the nation being painted, as one big row */
+.pickrow { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 10px 12px; margin: 10px 0 4px; border-radius: var(--r-m); background: var(--panel2); border: 1px solid var(--line); min-height: 56px; }
+.pickrow .sw { width: 28px; height: 28px; border-radius: 50%; flex: none; box-shadow: inset 0 0 0 2px rgba(255,255,255,.15); }
+.pickrow > span:nth-child(2) { flex: 1; min-width: 0; }
+.pickrow small { display: block; font-size: 12px; color: var(--muted); }
+.pickrow b { display: block; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prchg { color: var(--accent2); font-weight: 600; font-size: 14px; flex: none; }
+/* Districts */
+.planbar .seg { flex: 1; }
+.psum { font-size: 13px; color: var(--muted); margin: 8px 2px 4px; }
+.psum.ok { color: var(--good); }
+.dcard { border-left: 4px solid var(--c); }
+.dhead { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.stepb { width: 40px; height: 40px; border-radius: 50%; background: var(--panel3); font-size: 24px; line-height: 1; color: var(--text); flex: none; display: grid; place-items: center; padding-bottom: 3px; }
+.dname { flex: 1; min-width: 0; display: grid; grid-template-columns: 18px 1fr; grid-template-rows: auto auto; column-gap: 8px; align-items: center; text-align: left; padding: 2px 4px; }
+.dname i { grid-row: 1 / 3; width: 18px; height: 18px; border-radius: 50%; background: var(--c); }
+.dname b { font-size: 17px; }
+.dname small { font-size: 12px; color: var(--muted); }
+/* forms: the main button stays in reach */
+.sticky-cta { position: sticky; bottom: 0; z-index: 2; box-shadow: 0 -14px 14px -2px var(--panel); }
+.dockA { justify-content: flex-start; }
+.dx.size { flex: 0 1 190px; }
+#floating.tight .fab:not(#fsBtn) { display: none; }
+.titem > small:last-child { font-size: 11px; white-space: nowrap; }
+.dx.pickon { padding: 3px 4px 3px 12px; gap: 8px; font-size: 13px; color: var(--accent2); }
+.dx.pickon .ic svg { width: 18px; height: 18px; }
+.dxc { height: 36px; padding: 0 12px; border-radius: 18px; background: var(--panel3); color: var(--text); font-weight: 600; font-size: 13px; }
+@media (min-width: 760px) { #tabs { grid-auto-flow: row; } #tabs button { font-size: 12px; } }
+.swatches button { width: 36px; height: 36px; }
+.swatches button.on { border-color: #fff; box-shadow: 0 0 0 2px var(--panel2), 0 0 0 4px rgba(255,255,255,.5); }
+.swatches input[type=color] { width: 44px; height: 36px; }
+.pickbtn { margin: 0 0 10px; }

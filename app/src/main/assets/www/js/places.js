@@ -29,20 +29,23 @@ export function clearFocus() { setFocus(null); }
 
 function setFocus(f) {
   FOCUS.cur = f; app.focus = f;
+  if (UI.hideInfo && app.sel) UI.hideInfo(); // a card about somewhere else would be confusing
   const R = app.R;
   if (!f) { R.setFocus(null); R.setThickLines('focusEdge', null); UI.refreshPanels(); R.dirty(); return; }
   const g = f.layer === 'counties' ? app.D.geom.county : app.D.geom.prov;
   R.setFocus(f.layer, f.ids);
   // brass outline around the place; frame it
-  const lines = [], noNb = g.noNb || 65535; let x0 = 1, x1 = 0, y0 = 1, y1 = 0;
+  const lines = [], noNb = g.noNb || 65535, bb = new Map();
+  const grow = (u, a, b, c, d) => { let r = bb.get(u); if (!r) bb.set(u, r = [1, 1, 0, 0]); r[0] = Math.min(r[0], a, c); r[1] = Math.min(r[1], b, d); r[2] = Math.max(r[2], a, c); r[3] = Math.max(r[3], b, d); };
   for (let k = 0; k < g.luid.length; k += 2) {
-    const u = g.luid[k]; if (!f.ids.has(u)) continue; const v = g.lnb[k];
-    if (v !== noNb && f.ids.has(v)) continue;
-    const a = g.lpos[k * 2], b = g.lpos[k * 2 + 1], c = g.lpos[k * 2 + 2], d = g.lpos[k * 2 + 3]; lines.push(a, b, c, d);
-    x0 = Math.min(x0, a, c); x1 = Math.max(x1, a, c); y0 = Math.min(y0, b, d); y1 = Math.max(y1, b, d);
+    const u = g.luid[k], v = g.lnb[k], inU = f.ids.has(u), inV = v !== noNb && f.ids.has(v); if (!inU && !inV) continue;
+    const a = g.lpos[k * 2], b = g.lpos[k * 2 + 1], c = g.lpos[k * 2 + 2], d = g.lpos[k * 2 + 3];
+    if (inU) grow(u, a, b, c, d); if (inV) grow(v, a, b, c, d);
+    if (inU && inV) continue;
+    lines.push(a, b, c, d);
   }
   R.setThickLines('focusEdge', new Float32Array(lines), [0.95, 0.77, 0.42, 0.95], (s) => s < 800 ? 1.4 : 2.2, 9);
-  f.bbox = [x0, y0, x1, y1];
+  f.bbox = mainland(f, bb);
   // in Edit, paint for whoever holds the middle of the place
   const C = app.D.cells, W = app.W, mid = [];
   for (let i = 0; i < C.admin1.length && mid.length < 1; i++) if (C.country[i] && cellInFocus(i)) mid.push(i);
@@ -50,18 +53,47 @@ function setFocus(f) {
   frameFocus();
   UI.refreshPanels(); R.dirty();
 }
+// The part of a place worth framing: the cluster of areas around its most populous one, so France frames
+// metropolitan France rather than the Atlantic between it and French Guiana, and the US the lower 48.
+function mainland(f, bb) {
+  const U = app.D.units, popOf = (u) => (f.layer === 'counties' ? U.counties[u] : U.provinces[u]) ? (f.layer === 'counties' ? U.counties[u] : U.provinces[u]).pop || 0 : 0;
+  const unitOf = (u) => f.layer === 'counties' ? U.counties[u] : U.provinces[u];
+  // leave out areas whose pieces are scattered (across the date line, or overseas parts lumped into one area):
+  // their box is far bigger than the land they cover
+  const spread = (u, r) => { const a = unitOf(u) && unitOf(u).area; if (!a) return false; const lat = (360 / Math.PI) * Math.atan(Math.exp((0.5 - (r[1] + r[3]) / 2) * 2 * Math.PI)) - 90, k = 40075 * Math.cos(lat * Math.PI / 180); return (r[2] - r[0]) * (r[3] - r[1]) * k * k > a * 40; };
+  const all = [...bb.entries()].filter(([, r]) => r[2] - r[0] < 0.4 && r[2] >= r[0]);
+  const items = all.filter(([u, r]) => !spread(u, r)).length ? all.filter(([u, r]) => !spread(u, r)) : all;
+  if (!items.length) return null;
+  // group the areas into clusters of near neighbours and frame the most populous cluster
+  const gap = 0.013, left = new Set(items.map((x) => x[0])), boxOf = new Map(items);
+  let best = null, total = 0;
+  for (const [u] of items) total += popOf(u);
+  for (const [seed] of items) {
+    if (!left.has(seed)) continue; left.delete(seed);
+    const box = boxOf.get(seed).slice(); let pop = popOf(seed), grew = true;
+    while (grew) {
+      grew = false;
+      for (const u of left) {
+        const r = boxOf.get(u);
+        if (r[0] > box[2] + gap || r[2] < box[0] - gap || r[1] > box[3] + gap || r[3] < box[1] - gap) continue;
+        left.delete(u); pop += popOf(u); box[0] = Math.min(box[0], r[0]); box[1] = Math.min(box[1], r[1]); box[2] = Math.max(box[2], r[2]); box[3] = Math.max(box[3], r[3]); grew = true;
+      }
+    }
+    if (!best || pop > best.pop) best = { box, pop };
+  }
+  const box = best.box;
+  if (total > 0 && best.pop < total * 0.4) { // scattered islands with no main part: frame them all
+    for (const [, r] of items) { box[0] = Math.min(box[0], r[0]); box[1] = Math.min(box[1], r[1]); box[2] = Math.max(box[2], r[2]); box[3] = Math.max(box[3], r[3]); }
+  }
+  return box;
+}
 // Fit the camera to the chosen place (call again when panels open or close).
 export function frameFocus() {
   const f = FOCUS.cur, R = app.R; if (!f || !f.bbox) return;
-  const [x0, y0, x1, y1] = f.bbox;
-  if (f.kind === 'continent' || x1 - x0 > 0.5) { // continents wrap awkwardly: frame by their countries' label points
-    const U = app.D.units, pts = [...(f.countries || [f.country])].map((ci) => U.countries[ci - 1].label).filter((l) => l && l[0] != null);
-    if (pts.length) { const lx = pts.map((p) => p[0]), ly = pts.map((p) => p[1]); R.fitBounds(Math.min(...lx) - 6, Math.min(...ly) - 6, Math.max(...lx) + 6, Math.max(...ly) + 6); }
-  } else if (x1 > x0) {
-    const pad = Math.max(x1 - x0, y1 - y0) * 0.08;
-    const lng = (x) => x * 360 - 180, lat = (y) => (360 / Math.PI) * Math.atan(Math.exp((0.5 - y) * 2 * Math.PI)) - 90;
-    R.fitBounds(lng(x0 - pad), lat(y1 + pad), lng(x1 + pad), lat(y0 - pad));
-  }
+  const [x0, y0, x1, y1] = f.bbox; if (!(x1 > x0)) return;
+  const pad = Math.max(x1 - x0, y1 - y0) * 0.06;
+  const lng = (x) => x * 360 - 180, lat = (y) => (360 / Math.PI) * Math.atan(Math.exp((0.5 - y) * 2 * Math.PI)) - 90;
+  R.fitBounds(lng(Math.max(0, x0 - pad)), lat(Math.min(1, y1 + pad)), lng(Math.min(1, x1 + pad)), lat(Math.max(0, y0 - pad)));
 }
 // Is a land cell inside the chosen place? (painting stays inside it)
 export function cellInFocus(i) {

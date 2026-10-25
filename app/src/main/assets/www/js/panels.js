@@ -1,6 +1,6 @@
 // Atlas Forge — UI panels.
 import { h, fmt, pct, dateOf, esc, hex, parseHex, hsl, clamp, PARTY_COLORS, rampLUT, RAMPS } from './util.js';
-import { saveSettings, applyMapStyle, chooseLevel } from './app.js';
+import { saveSettings, applyMapStyle, chooseLevel, overlayable } from './app.js';
 import { BASEMAPS } from './basemap.js';
 import { app, setTheme, refresh, theme, plan, select, undoRedo, scheduleStats, computePlanStats, rebuildCatalog, setWorld, step, autosave, viewHistory, restoreHistory, usePack, ensurePlanPack, cellAtScreen } from './app.js';
 import { packList, levelList } from './precincts.js';
@@ -27,7 +27,9 @@ const ICON = {
   menu: '<svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   minus: '<svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>',
-  home: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/></svg>',
+  home: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.6 2.6 14.4 0 17M12 3.5c-2.6 2.6-2.6 14.4 0 17"/></svg>',
+  pin: '<svg viewBox="0 0 24 24"><path d="M12 21s-6-5.6-6-10a6 6 0 0 1 12 0c0 4.4-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/></svg>',
+  gear: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></svg>',
   search: '<svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg>',
   hand: '<svg viewBox="0 0 24 24"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V11M11 10V4a1.5 1.5 0 0 1 3 0v6M14 10V5.5a1.5 1.5 0 0 1 3 0V12M17 9.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1.5a6 6 0 0 1-4.6-2.2L4.5 15.5a1.5 1.5 0 0 1 2.3-2l1.2 1.4"/></svg>',
   brush: '<svg viewBox="0 0 24 24"><path d="M18.5 3.5l2 2L11 15l-2-2zM9 13c-2.5 0-4 1.6-4 4 0 1.5-1 2.5-2 3 3.5.5 8-.5 8-5"/></svg>',
@@ -89,12 +91,16 @@ export function init() {
   // keep track of how much of the map the sheet covers so the camera frames the visible part
   const sheet = $('#sheet');
   const updPad = () => {
-    const r = sheet.getBoundingClientRect(), wide = window.innerWidth >= 760 && !app.full;
-    app.R.pad = app.full ? { l: 0, b: 0 } : wide ? { l: r.right, b: 0 } : { l: 0, b: Math.max(0, window.innerHeight - r.top) };
-    $('#attr').style.bottom = (wide ? 6 : app.R.pad.b + 4) + 'px';
-    const ml = $('#mapLegend'), dk = $('#dock'), dockH = dk && !dk.hidden ? dk.getBoundingClientRect().height + 10 : 0;
-    if (dk) { dk.style.bottom = (wide || app.full ? 14 : app.R.pad.b + 10) + 'px'; dk.style.left = (wide ? r.right + 14 : 10) + 'px'; dk.classList.toggle('tucked', !wide && app.R.pad.b > window.innerHeight * 0.66); }
-    if (ml) { ml.style.bottom = (wide ? 14 + dockH : app.R.pad.b + 10 + dockH) + 'px'; ml.style.left = (wide ? r.right + 12 : 10) + 'px'; }
+    const r = sheet.getBoundingClientRect(), big = window.innerWidth >= 760, wide = big && !app.full, tr = $('#tabs').getBoundingClientRect();
+    // full screen hides only the panel: the tab bar (or rail on tablets) stays so every mode is one tap away
+    app.R.pad = app.full ? (big ? { l: tr.right, b: 0 } : { l: 0, b: tr.height }) : wide ? { l: r.right, b: 0 } : { l: 0, b: Math.max(0, window.innerHeight - r.top) };
+    $('#attr').style.bottom = (big ? 6 : app.R.pad.b + 4) + 'px';
+    const ml = $('#mapLegend'), dk = $('#dock'), dockH = dk && !dk.hidden ? dk.getBoundingClientRect().height + 10 + (dk.querySelector('.dockA') ? 52 : 0) : 0;
+    const left = big ? (app.full ? tr.right : r.right) + 14 : 10;
+    if (dk) { dk.style.bottom = (big ? 14 : app.R.pad.b + 10) + 'px'; dk.style.left = left + 'px'; dk.classList.toggle('tucked', !big && app.R.pad.b > window.innerHeight * 0.66); }
+    // short screens: when the tool bar reaches the floating buttons, keep only the panel button
+    const fl = $('#floating'); if (fl && dk) { fl.classList.remove('tight'); if (!dk.hidden && !big) { const top = dk.getBoundingClientRect().top - (dk.querySelector('.dockA') ? 52 : 0); if (top < fl.getBoundingClientRect().bottom + 8) fl.classList.add('tight'); } }
+    if (ml) { ml.style.bottom = (big ? 14 + dockH : app.R.pad.b + 10 + dockH) + 'px'; ml.style.left = (big ? left - 2 : 10) + 'px'; }
     app.updPad = updPad;
   };
   if (window.ResizeObserver) new ResizeObserver(updPad).observe(sheet);
@@ -105,16 +111,15 @@ export function init() {
     if (!$('#modal').classList.contains('hidden')) { closeModal(); return true; }
     if (infoOpen) { hideInfo(); return true; }
     if (app.running) { setRunning(false); return true; }
-    if (app.full) { setFull(false); return true; }
     if (app.mode !== 'edit') { setMode('edit'); return true; }
     autosave(); return false;
   };
   setMode('edit'); setFull(true); setTimeout(worldView, 350);
 }
-// Full screen: only the map, the tool bar and the hint; everything else is one tap away.
+// Full screen: the panel folds away; the map, the tool bar, the header and the tabs stay.
 export function setFull(on) {
   app.full = on; document.body.classList.toggle('full', on);
-  const b = $('#fsBtn'); if (b) { b.innerHTML = on ? ICON.shrink : ICON.expand; b.setAttribute('aria-label', on ? 'Show panels' : 'Full screen'); }
+  const b = $('#fsBtn'); if (b) { b.innerHTML = on ? ICON.shrink : ICON.expand; b.setAttribute('aria-label', on ? 'Show the panel' : 'Hide the panel'); b.title = on ? 'Show the panel' : 'Hide the panel'; }
   if (window.AndroidBridge && AndroidBridge.setImmersive) try { AndroidBridge.setImmersive(on); } catch {}
   if (app.updPad) app.updPad(); requestAnimationFrame(() => app.updPad && app.updPad()); app.R && app.R.dirty();
   if (FOCUS.cur) setTimeout(frameFocus, 280); // keep the chosen place in view as panels come and go
@@ -222,19 +227,25 @@ function renderDock() {
   if (app.updPad) app.updPad();
 }
 const toolBtn = (t, ic, label, after) => h('button', { class: 'tool' + (app.tool === t ? ' on' : ''), 'aria-label': label, 'aria-pressed': String(app.tool === t), onclick: () => { app.tool = t; if (after) after(t); refreshPanels(); } }, h('span', { class: 'ti', html: ICON[ic] }), h('small', null, label));
-const undoBtns = () => [h('div', { class: 'undo2' },
-  h('button', { 'aria-label': 'Undo', disabled: !app.undo.length, onclick: () => undoRedo(false), html: ICON.undo }),
-  h('button', { 'aria-label': 'Redo', disabled: !app.redo.length, onclick: () => undoRedo(true), html: ICON.redo }))];
-function brushStepper() {
-  if (!['brush', 'erase'].includes(app.tool)) return null;
-  const set = (v) => { app.brush = clamp(v, 1, 16); refreshPanels(); };
-  return h('div', { class: 'stepper', title: 'Brush size' }, h('button', { 'aria-label': 'Smaller brush', onclick: () => set(app.brush - 1) }, '−'), h('b', null, app.brush), h('button', { 'aria-label': 'Bigger brush', onclick: () => set(app.brush + 1) }, '+'));
+// Above the bar: undo / redo on the left, brush size on the right (only while painting or erasing).
+function dockExtras() {
+  const left = h('div', { class: 'dx' },
+    h('button', { class: 'dxb', 'aria-label': 'Undo', disabled: !app.undo.length, onclick: () => undoRedo(false), html: ICON.undo }),
+    h('button', { class: 'dxb', 'aria-label': 'Redo', disabled: !app.redo.length, onclick: () => undoRedo(true), html: ICON.redo }));
+  let right = null;
+  if (['brush', 'erase'].includes(app.tool)) {
+    const out = h('b', null, app.brush), dotEl = h('i', { style: { width: (6 + app.brush * 1.5) + 'px', height: (6 + app.brush * 1.5) + 'px' } });
+    right = h('label', { class: 'dx size', title: 'Brush size' }, h('span', { class: 'bdot' }, dotEl),
+      h('input', { type: 'range', min: 1, max: 16, step: 1, value: app.brush, 'aria-label': 'Brush size', oninput: (e) => { app.brush = +e.target.value; out.textContent = app.brush; dotEl.style.width = dotEl.style.height = (6 + app.brush * 1.5) + 'px'; } }), out);
+  }
+  if (app.tool === 'pick') right = h('div', { class: 'dx pickon' }, h('span', { class: 'ic', html: ICON.dropper }), h('span', null, 'Tap the map to pick'), h('button', { class: 'dxc', onclick: () => { app.tool = 'brush'; refreshPanels(); } }, 'Cancel'));
+  return h('div', { class: 'dockA' }, left, right);
 }
 // painting needs the map, so tools that paint fold the sheet down
 const foldSheet = (t) => { if (['brush', 'erase', 'fill'].includes(t) && app.sheet !== 'peek' && window.innerWidth < 760) setSheet('peek'); };
 function drawDock(p) {
   const st = app.stats, coi = app.drawTab === 'coi';
-  const tools = coi ? [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['erase', 'eraser', 'Erase']] : [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['erase', 'eraser', 'Erase'], ['fill', 'bucket', 'Fill'], ['pick', 'dropper', 'Pick']];
+  const tools = coi ? [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['erase', 'eraser', 'Erase']] : [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['erase', 'eraser', 'Erase'], ['fill', 'bucket', 'Fill']];
   // the seal: current district (or place), its colour, and how full it is against the ideal population
   let seal;
   if (coi) { const c = p.cois && p.cois[app.coi]; seal = h('button', { class: 'seal', style: { '--c': hex(COI_COLORS[(app.coi || 0) % COI_COLORS.length]), '--f': '1turn' }, onclick: () => setSheet('half'), 'aria-label': 'Current place' }, h('b', null, c ? c.name.slice(0, 2) : '—')); }
@@ -243,7 +254,7 @@ function drawDock(p) {
     seal = h('button', { class: 'seal' + (d && Math.abs(d.dev) > 0.05 && d.units ? ' off' : ''), style: { '--c': hex(p.colors[app.district]), '--f': Math.min(1, fill) + 'turn' }, 'aria-label': `District ${app.district + 1}, tap to choose another`, onclick: () => openDistrictPicker(p) },
       h('b', null, app.district + 1), h('small', null, d && d.units ? (d.dev >= 0 ? '+' : '') + (d.dev * 100).toFixed(1) + '%' : 'empty'));
   }
-  return [h('div', { class: 'toolrow' }, ...tools.map(([t, ic, l]) => toolBtn(t, ic, l, foldSheet))), ...undoBtns(), brushStepper(), seal].filter(Boolean);
+  return [dockExtras(), h('div', { class: 'toolrow' }, ...tools.map(([t, ic, l]) => toolBtn(t, ic, l, foldSheet))), h('div', { class: 'sealw' }, seal, h('small', null, coi ? 'Place' : 'District'))];
 }
 function openDistrictPicker(p) {
   const st = app.stats, grid = h('div', { class: 'dpick' });
@@ -252,7 +263,8 @@ function openDistrictPicker(p) {
     grid.append(h('button', { class: 'dchip' + (d === app.district ? ' on' : '') + (p.locked[d] ? ' locked' : ''), style: { '--c': hex(p.colors[d]) }, onclick: () => { app.district = d; if (app.tool === 'pan' || app.tool === 'pick') app.tool = 'brush'; closeModal(); refreshPanels(); } },
       h('b', null, d + 1), h('small', { class: ds && Math.abs(ds.dev) > 0.05 && ds.units ? 'bad' : '' }, ds && ds.units ? (ds.dev >= 0 ? '+' : '') + (ds.dev * 100).toFixed(1) + '%' : 'empty')));
   }
-  openModal('Paint which district?', h('div', null, grid, st ? h('p', { class: 'muted small' }, `Each district should hold about ${fmt(st.ideal)} people. The number under each is how far it is from that.`) : null));
+  const pick = btn([h('span', { class: 'ic', html: ICON.dropper }), 'Tap a district on the map instead'], () => { app.tool = 'pick'; closeModal(); refreshPanels(); toast('Tap a district on the map'); }, 'wide pickbtn');
+  openModal('Paint which district?', h('div', null, pick, grid, st ? h('p', { class: 'muted small' }, `Each district should hold about ${fmt(st.ideal)} people. The number under each is how far it is from that.`) : null));
 }
 function simDock() {
   const W = app.W;
@@ -262,18 +274,22 @@ function simDock() {
     h('div', { class: 'speeds', role: 'group', 'aria-label': 'Speed' }, [[1, '1×'], [2, '4×'], [3, '12×'], [4, 'Max']].map(([v, l]) => h('button', { class: app.speed === v ? 'on' : '', onclick: () => { app.speed = v; if (!app.running) setRunning(true); else refreshPanels(); } }, l))),
     h('button', { class: 'tool yr', 'aria-label': 'Advance one year', onclick: () => step(12) }, h('b', null, '+1'), h('small', null, 'year'))];
 }
+const choosePaintNation = () => chooseNation('Paint land for…', (id) => { app.paintNation = id; app.paintChosen = true; app.tool = 'brush'; refreshPanels(); }, true, true, () => { app.editTool = 'borders'; app.tool = 'pick'; refreshPanels(); toast('Tap a nation on the map'); });
 function editDock() {
   const W = app.W, borders = app.editTool === 'borders';
-  const tools = borders ? [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['pick', 'dropper', 'Pick']] : [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint']];
+  const tools = [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint']];
   const n = W.nations[app.paintNation];
-  const seal = borders ? h('button', { class: 'seal', style: { '--c': n ? hex(n.color) : '#5a5f68', '--f': '1turn' }, 'aria-label': 'Nation being painted', onclick: () => chooseNation('Paint land for…', (id) => { app.paintNation = id; app.paintChosen = true; app.tool = 'brush'; refreshPanels(); }, true, true) }, h('b', null, n ? (n.a3 || n.name).slice(0, 3) : '∅')) : null;
-  return [h('div', { class: 'toolrow' }, ...tools.map(([t, ic, l]) => toolBtn(t, ic, l, foldSheet))), ...undoBtns(), brushStepper(), seal].filter(Boolean);
+  const seal = borders ? h('div', { class: 'sealw' }, h('button', { class: 'seal', style: { '--c': n ? hex(n.color) : '#5a5f68', '--f': '1turn' }, 'aria-label': `Painting land for ${n ? n.name : 'nobody'}, tap to change`, onclick: choosePaintNation }, h('b', null, n ? (n.a3 || n.name).slice(0, 3) : '∅')), h('small', null, 'Nation'))
+    : h('div', { class: 'dval' }, h('small', null, 'Painting'), h('b', null, dataLabel()));
+  return [dockExtras(), h('div', { class: 'toolrow' }, ...tools.map(([t, ic, l]) => toolBtn(t, ic, l, foldSheet))), seal];
 }
+const dataLabel = () => { const a = app.dataAttr, v = app.dataValue; const nm = { dev: 'Development', pop: 'Population', lean: 'Lean', terrain: 'Terrain' }[a] || a; return a === 'terrain' ? (app.W.D.units.terrains[v] || nm) : a === 'pop' ? `${nm} ×${v}` : a === 'lean' ? leanText(v) : `${nm} ${typeof v === 'number' ? +v.toFixed(2) : v}`; };
 
 // ------------------------------------------------------------------ render
 // Small floating legend on the map for maps that colour by value.
 function mapLegend() {
-  const el = $('#mapLegend'); if (!el) return; const L = app.legend, t = theme();
+  const el = $('#mapLegend'); if (!el) return;
+  const ov = app.mode === 'edit' && app.overlayLegend && app.overlayLegend.type === 'ramp', L = ov ? app.overlayLegend : app.legend, t = ov ? { label: app.overlayLegend.label } : theme();
   if (!L || L.type !== 'ramp' || app.mode === 'draw' || t.noLegend) { el.hidden = true; return; }
   el.hidden = false; el.innerHTML = '';
   const c = h('canvas', { width: 128, height: 1 }); const x = c.getContext('2d'); const img = x.createImageData(128, 1); const lut = rampLUT(L.ramp);
@@ -295,7 +311,7 @@ export function refreshPanels() {
     else if (app.mode === 'draw') renderDraw(next);
     else renderEdit(next);
   });
-  body.replaceChildren(next); body.scrollTop = scroll;
+  body.replaceChildren(next); body.scrollTop = app._scrollTop ? 0 : scroll; app._scrollTop = false;
 }
 // Explore after new map-level data: refresh only the legend, the level note and the colour choices.
 function softExplore() {
@@ -378,7 +394,7 @@ function welcomeCard() {
     act('search', 'Look something up', 'Find any country, province, county or city', openSearch),
     act('layers', 'Colour the world by data', 'Population, wealth, politics, climate and 300 more', openThemeBrowser),
     act('draw', 'Draw election districts', 'Paint your own map from real precincts, counties or local areas', () => setMode('draw')),
-    act('edit', 'Change the world', 'Move borders, edit data, start wars, drop disasters', () => setMode('edit')),
+    act('edit', 'Change the world', 'Move borders, rename nations, paint your own data', () => setMode('edit')),
     h('p', { class: 'muted small' }, 'Tap any place on the map for details. Pinch to zoom, drag to move.'));
 }
 const LEVEL_NAMES = ['Nations', 'States', 'Districts', 'Sub-districts', 'Localities', 'Villages'];
@@ -442,6 +458,12 @@ function spark(values, color, w = 140, hgt = 34) {
   values.forEach((v, k) => { const px = k / (values.length - 1) * (w * 2 - 4) + 2, py = hgt * 2 - 4 - (v - lo) / sp * (hgt * 2 - 8); k ? x.lineTo(px, py) : x.moveTo(px, py); });
   x.stroke(); return c;
 }
+// land area of a nation as drawn (cells are smaller toward the poles); cached until borders change
+function nationArea(n) {
+  const W = app.W, key = n.id + ':' + n.cells + ':' + app.aggStamp; if (n._areaKey === key) return n._area;
+  let a = 0; for (const i of W.land) if (W.owner[i] === n.id) a += W.area[(i / W.Wd) | 0];
+  n._areaKey = key; n._area = a; return a;
+}
 function nationBlock(n) {
   const W = app.W;
   if (!n || !n.alive) return h('div', { class: 'muted' }, 'Unclaimed land');
@@ -451,7 +473,7 @@ function nationBlock(n) {
   void wars; void bloc;
   return h('div', { class: 'nation' },
     row('Population', fmt(n.pop)), row('GDP', '$' + fmt(n.gdp * 1e6)), row('GDP per person', '$' + fmt(n.pop ? n.gdp * 1e6 / n.pop : 0)),
-    row('Land', `${n.cells.toLocaleString()} cells`));
+    row('Land', `${fmt(nationArea(n))} km²`));
 }
 function infoCard() {
   const s = app.sel, W = app.W, U = W.D.units, C = W.D.cells;
@@ -686,15 +708,12 @@ function renderDraw(b) {
     b.append(h('div', { class: 'card slim' }, h('p', null, `This plan uses ${p.pack.startsWith('L:') ? 'local areas (' + p.pack.slice(2) + ')' : p.pack + ' precincts'}.`), btn('Load map', () => ensurePlanPack(), 'primary wide')));
     return;
   }
-  b.append(h('div', { class: 'planbar' },
-    h('select', { onchange: async (e) => { app.activePlan = +e.target.value; app.district = 0; await ensurePlanPack(); computePlanStats(); refresh(); refreshPanels(); } }, W.plans.map((x) => h('option', { value: x.id, selected: x.id === p.id }, x.name + (x.status && x.status !== 'Scratch work' ? ` · ${x.status}` : '')))),
-));
-  if (app.stats) b.append(districtStrip(p, app.stats));
-  // three tabs: paint, see how the map does, everything else
+  // three tabs at the top: paint, see how the map does, everything else
   if (app.drawTab === 'pop' || app.drawTab === 'eval') app.drawTab = 'results';
   const tabOf = ['coi', 'layers', 'more'].includes(app.drawTab) ? 'more' : app.drawTab || 'paint';
-  b.append(seg([['paint', 'Paint'], ['results', 'Results'], ['more', 'More']], tabOf, (v) => { const was = app.drawTab; app.drawTab = v; if (was === 'coi') refresh(); refreshPanels(); }));
+  b.append(h('div', { class: 'planbar' }, seg([['paint', 'Paint'], ['results', 'Results'], ['more', 'More']], tabOf, (v) => { const was = app.drawTab; app.drawTab = v; if (was === 'coi') refresh(); app._scrollTop = true; refreshPanels(); })));
   const st = app.stats;
+  if (st) b.append(planSummary(p, st));
   if (app.drawTab === 'results') { renderPopTab(b, p, st); renderEvalTab(b, p, st); return; }
   if (app.drawTab === 'layers' || app.drawTab === 'coi') {
     b.append(h('button', { class: 'linkbtn back', onclick: () => { const was = app.drawTab; app.drawTab = 'more'; if (was === 'coi') refresh(); refreshPanels(); } }, '‹ More'));
@@ -702,25 +721,40 @@ function renderDraw(b) {
   }
   if (app.drawTab === 'more') {
     const O = app.drawOpts;
-    const item = (title, text, fn) => h('button', { class: 'act', onclick: fn }, h('span', null, h('b', null, title), h('small', null, text)));
-    b.append(item('Communities', 'Mark neighbourhoods that should stay in one district', () => { app.drawTab = 'coi'; refresh(); refreshPanels(); }),
-      item('What the map shows', 'Data under your districts, boundaries, colour by vote', () => { app.drawTab = 'layers'; refreshPanels(); }),
-      item('Plan options', 'Rename, share, copy, export or delete this plan', () => openPlanMenu(p)),
-      item('New plan', 'Start another map', () => openModal('New district plan', newPlanForm(true))));
+    if (W.plans.length > 1) b.append(h('label', { class: 'field' }, 'Plan', h('select', { onchange: async (e) => { app.activePlan = +e.target.value; app.district = 0; await ensurePlanPack(); computePlanStats(); refresh(); refreshPanels(); } }, W.plans.map((x) => h('option', { value: x.id, selected: x.id === p.id }, x.name + (x.status && x.status !== 'Scratch work' ? ` · ${x.status}` : ''))))));
+    const item = (ic, title, text, fn) => h('button', { class: 'act', onclick: fn }, ic ? h('span', { class: 'ic', html: ICON[ic] }) : null, h('span', null, h('b', null, title), h('small', null, text)));
+    b.append(item('pin', 'Communities', 'Mark neighbourhoods that should stay in one district', () => { app.drawTab = 'coi'; refresh(); refreshPanels(); }),
+      item('layers', 'What the map shows', 'Data under your districts, boundaries, colour by vote', () => { app.drawTab = 'layers'; refreshPanels(); }),
+      item('gear', 'Plan options', 'Rename, share, copy, export or delete this plan', () => openPlanMenu(p)),
+      item('plus', 'New plan', 'Start another map', () => openModal('New district plan', newPlanForm(true))));
     b.append(section('Painting', h('div', { class: 'tog-row col' },
       toggle(`Paint whole ${parentWord(app.W, p)} at once`, O.parent, (v) => { O.parent = v; }),
       toggle("Don't paint over other districts", O.noOverwrite, (v) => { O.noOverwrite = v; }))));
     if (p.unit === 'precincts' && planLayer(W, p).pack.elections.length) b.append(electionPicker(p));
     return;
   }
-  b.append(btn('✨ Draw fair districts for me', () => openAutoDraw(p), 'wide'));
   if (st) {
-    const sel = st.districts[app.district];
-    b.append(h('div', { class: 'card slim' },
-      h('div', { class: 'kvrow' }, row('District ' + (app.district + 1), fmt(sel.pop) + ' people'), row('Target', fmt(st.ideal))),
-      sel.units ? voteBar(sel.shares, st.parties) : h('p', { class: 'muted small' }, 'Empty. Paint on the map to add areas.'),
+    const sel = st.districts[app.district], go = (k) => { app.district = (k + p.n) % p.n; if (app.tool === 'pan' || app.tool === 'pick') app.tool = 'brush'; refreshPanels(); };
+    b.append(h('div', { class: 'card slim dcard', style: { '--c': hex(p.colors[app.district]) } },
+      h('div', { class: 'dhead' },
+        h('button', { class: 'stepb', 'aria-label': 'Previous district', onclick: () => go(app.district - 1) }, '‹'),
+        h('button', { class: 'dname', onclick: () => openDistrictPicker(p) }, h('i'), h('b', null, `District ${app.district + 1}`), h('small', null, `of ${p.n} · tap to choose`)),
+        h('button', { class: 'stepb', 'aria-label': 'Next district', onclick: () => go(app.district + 1) }, '›')),
+      h('div', { class: 'kvrow' }, row('People', fmt(sel.pop)), row('Target', fmt(st.ideal))),
+      sel.units ? voteBar(sel.shares, st.parties) : h('p', { class: 'muted small' }, 'Empty. Choose Paint in the bar below and drag across the map.'),
       h('div', { class: 'btns' }, btn(p.locked[app.district] ? 'Unlock' : 'Lock', () => { p.locked[app.district] = !p.locked[app.district]; refreshPanels(); }), sel.units ? btn('Zoom to it', () => zoomToDistrict(p, app.district)) : null)));
+    if (p.n <= 60) b.append(districtStrip(p, st));
   }
+  b.append(btn('✨ Draw fair districts for me', () => openAutoDraw(p), 'wide'));
+}
+// One line: how much is left to do and how balanced the map is.
+function planSummary(p, st) {
+  const total = st.districts.reduce((a, d) => a + d.pop, 0) + st.unassignedPop;
+  const txt = st.unassignedPop >= total * 0.999 ? `Nothing painted yet · ${fmt(total)} people to place in ${p.n} districts`
+    : st.unassignedUnits === 0 ? `Every area is in a district · largest deviation ${pct(st.maxDev, 1)}`
+    : `${fmt(st.unassignedPop)} people not in a district yet · largest deviation ${pct(st.maxDev, 1)}`;
+  const done = st.unassignedUnits === 0 && st.maxDev <= 0.05;
+  return h('div', { class: 'psum' + (done ? ' ok' : '') }, done ? '✓ ' : '', txt);
 }
 // Districtr-style balance strip: one bar per district, the line is the ideal population.
 function districtStrip(p, st) {
@@ -730,11 +764,11 @@ function districtStrip(p, st) {
     el.append(h('button', { class: 'db' + (d.k === app.district ? ' on' : '') + (bad ? ' bad' : ''), style: { '--c': hex(p.colors[d.k]) }, title: `District ${d.k + 1}: ${fmt(d.pop)} (${(d.dev * 100).toFixed(1)}%)`,
       onclick: () => { app.district = d.k; if (app.tool === 'pan' || app.tool === 'pick') app.tool = 'brush'; refreshPanels(); } }, h('i', { style: { height: Math.min(100, f / 1.25 * 100) + '%' } })));
   }
-  return h('div', { class: 'dstripw' }, el, h('small', { class: 'muted' }, `${fmt(st.unassignedPop)} people unassigned · largest deviation ${pct(st.maxDev, 1)}`));
+  return h('div', { class: 'dstripw' }, el, h('small', { class: 'muted' }, 'Each bar is a district; the line is the target size. Tap one to paint it.'));
 }
 function electionPicker(p) {
   const P = planLayer(app.W, p).pack;
-  if (!P.elections.length) return h('div', { class: 'muted small' }, 'No election results in this state\'s data.');
+  if (!P.elections.length) return h('div', { class: 'muted small' }, 'No election results in this map\'s data.');
   return h('label', { class: 'field' }, 'Votes from', h('select', { onchange: (e) => { p.election = +e.target.value; computePlanStats(); refreshPanels(); } }, P.elections.map((e, k) => h('option', { value: k, selected: k === (p.election || 0) }, e.label))));
 }
 // Districtr's population tab: one balance bar per district against the ideal size.
@@ -818,7 +852,8 @@ export function openAutoDraw(p) {
     worker.postMessage({ type: 'run', n: G.n, k: p.n, off: G.off, nb: G.nb, pop: G.pop, dem: G.dem, rep: G.rep, parent: goals.counties ? G.parent : null, assign: local, timeMs: goals.seconds * 1000, tol: 0.01, goals, seed: (Math.random() * 1e9) | 0 });
   } }, 'Draw it');
   const body = h('div', { class: 'form' },
-    h('p', { class: 'muted small' }, 'Uses ReCom — the method MGGG (the makers of Districtr) use to study fair maps: it repeatedly merges two neighbouring districts and splits them again along a random tree, keeping changes that score better. Districts always stay in one piece and within 1% population.'),
+    h('p', { class: 'muted small' }, 'Uses ReCom — the method MGGG (the makers of Districtr) use to study fair maps: it repeatedly merges two neighbouring districts and splits them again along a random tree, keeping changes that score better. Districts stay in one piece and aim for within 1% population.'),
+    (() => { let n = 0; try { n = recomInput(W, p).n; } catch {} return n && n < p.n * 4 ? h('div', { class: 'offline' }, `Only ${n.toLocaleString()} areas for ${p.n} districts, so the districts can't be evened out much. For balanced districts, start a plan from a finer level (more, smaller areas).`) : null; })(),
     h('div', { class: 'sec-t' }, 'Goals'),
     h('div', { class: 'tog-row col' },
       toggle('Compact shapes', goals.compact, (v) => { goals.compact = v; }),
@@ -845,7 +880,7 @@ function renderEvalTab(b, p, st) {
     row('Compactness (Polsby-Popper)', pps.length ? `avg ${(pps.reduce((a, c) => a + c, 0) / pps.length).toFixed(2)} · min ${Math.min(...pps).toFixed(2)}` : '—')));
   if (p.cois && p.cois.length) { const R = coiReport(app.W, p).filter((x) => x.units); if (R.length) b.append(h('div', { class: 'card slim' }, check(R.every((x) => x.whole), 'Places kept whole', `${R.filter((x) => x.whole).length} of ${R.length}`))); }
   if (p.unit === 'precincts') b.append(electionPicker(p));
-  if (st.raceLabels) {
+  if (st.raceLabels && st.raceLabels.length) {
     const tot = st.districts.reduce((a, d) => a + d.pop, 0) || 1;
     const PK = p.unit === 'precincts' && planLayer(app.W, p) ? planLayer(app.W, p).pack : null;
     b.append(section(`Demographics (${PK && PK.kind === 'admin' ? '2020' : PK ? '2010' : ''} census)`.replace('( census)', '(census)'), h('div', { class: 'scrollx' }, h('table', { class: 'tbl' },
@@ -919,7 +954,9 @@ function newPlanForm(inModal) {
     if (st.customN) return; let n = realN();
     if (st.unit === 'admin' && st.adm && typeof curLevel === 'function') { const m = curLevel(), part = m && m.byState ? m.parts.find((q) => 'L:' + q.key === st.adm) : null, count = part ? part.count : m ? m.count : n; n = Math.min(n, Math.max(2, count)); } // never more districts than areas
     st.n = n; nInput.value = n;
+    const real = realN(); seatNote.textContent = real > n ? `The real parliament has ${real} seats, but this level only has ${n} areas, so each area would be its own district. Pick a finer level to draw ${real}.` : '';
   };
+  const seatNote = h('div', { class: 'muted small' });
   const scopeSel = h('select', { onchange: (e) => { st.scope = +e.target.value; setRealN(); } },
     h('option', { value: 0 }, 'Whole world'), [...U.countries.map((c, k) => [c.name, k + 1])].sort().map(([n, v]) => h('option', { value: v, selected: v === st.scope }, n)));
   // any of the 50 states (+ DC): real precincts where we have them, otherwise 2020 census voting districts,
@@ -989,7 +1026,7 @@ function newPlanForm(inModal) {
       if (app.admPreset) setTimeout(() => { sel.value = 'admin'; sel.dispatchEvent(new Event('change')); }, 0); return sel; })()),
     pctRows, admRows, worldRows,
     h('label', null, 'Name', nameIn),
-    h('label', null, 'Number of districts', nInput),
+    h('label', null, 'Number of districts', nInput), seatNote,
     randRow, status,
     h('details', { class: 'sec' }, h('summary', null, 'Have a plan code?'), (() => {
       const ta = h('textarea', { rows: 3, placeholder: 'Paste a code that starts with AF1:' });
@@ -1027,7 +1064,7 @@ function newPlanForm(inModal) {
         else if (unit === 'precincts') { const b = W.D.packs[pack].bbox; app.R.fitBounds(b[0], b[1], b[2], b[3]); }
         else if (p.scope) { const c = U.countries[p.scope - 1]; const n = W.nations[p.scope]; if (n && n.alive) zoomToNation(n); else app.R.flyTo(c.label[0], c.label[1]); }
       } catch (err) { status.textContent = err.message; toast(err.message, 5000); button.disabled = false; }
-    }, 'primary wide'));
+    }, 'primary wide sticky-cta'));
   return f;
 }
 // Seats in each country's national lower house (single-seat districts where the country uses them).
@@ -1124,13 +1161,15 @@ function renderEdit(b) {
   if (['disaster', 'diplomacy'].includes(app.editTool)) app.editTool = 'borders'; // simulation tools are switched off for now
   b.append(seg([['borders', 'Borders'], ['data', 'Data'], ['nations', 'Nations']], ['release', 'capital'].includes(app.editTool) ? 'nations' : app.editTool, (v) => {
     app.editTool = v; app.tool = (v === 'borders' && app.paintChosen) || v === 'data' ? 'brush' : 'pan';
-    if (v === 'data') autoTheme(); else if (['borders', 'nations', 'diplomacy'].includes(v) && !/^(nations|n_)/.test(app.themeId)) setTheme('nations'); refreshPanels(); }));
+    if (v === 'data') autoTheme(); else if (['borders', 'nations', 'diplomacy'].includes(v) && !/^(nations|n_)/.test(app.themeId)) setTheme('nations'); app._scrollTop = true; refreshPanels(); }));
   const et = app.editTool;
   const ABOUT = { borders: 'Give land to any nation by painting it.', data: 'Paint new values for development, population, politics or terrain.', disaster: 'Pick a disaster, then tap where it strikes.', nations: 'Tap a nation to rename it, recolour it, change its government or split it.', diplomacy: 'Tap a nation, then set how it gets on with others, or start a war.' };
   if (ABOUT[et]) b.append(h('p', { class: 'about' }, ABOUT[et]));
   if (et === 'borders') {
     const n = W.nations[app.paintNation];
-    b.append(h('div', { class: 'paintwith' }, h('span', null, 'Paint land for'), h('button', { class: 'btn' + (app.paintChosen ? '' : ' primary'), onclick: () => chooseNation('Paint land for…', (id) => { app.paintNation = id; app.paintChosen = true; app.tool = 'brush'; refreshPanels(); }, true, true) }, !app.paintChosen ? 'Choose a nation' : n ? [dot(n.color), n.name] : [dot([90, 90, 90]), 'Unclaimed (erase)'], ' ▾')));
+    b.append(h('button', { class: 'pickrow', onclick: choosePaintNation }, h('span', { class: 'sw', style: { background: n ? hex(n.color) : '#5a5f68' } }),
+      h('span', null, h('small', null, 'Painting land for'), h('b', null, !app.paintChosen ? 'Choose a nation' : n ? n.name : 'Nobody (unclaimed land)')), h('span', { class: 'prchg' }, 'Change')));
+    b.append(h('p', { class: 'muted small' }, 'Drag on the map to paint. Use Move in the bar to pan without painting, or two fingers.'));
   } else if (et === 'data') {
     const attrs = [['dev', 'Development'], ['pop', 'Population (multiply)'], ['lean', 'Political lean'], ['terrain', 'Terrain'], ...Object.keys(W.custom).map((k) => [k, k + ' (your layer)'])];
     b.append(h('label', { class: 'field' }, 'Paint', h('select', { onchange: (e) => { app.dataAttr = e.target.value; app.dataValue = defaultValue(app.dataAttr); refreshPanels(); autoTheme(); } }, attrs.map(([v, l]) => h('option', { value: v, selected: v === app.dataAttr }, l)))));
@@ -1141,7 +1180,43 @@ function renderEdit(b) {
     b.append(h('p', { class: 'muted small' }, 'Tap anywhere on the map to unleash it.'));
   } else if (et === 'nations' || et === 'release' || et === 'capital') renderNationEditor(b);
   else if (et === 'diplomacy') renderDiplomacy(b);
+  b.append(overlaySection());
 }
+// Overlay: lay any other map see-through over the one you are editing (population over borders, say).
+function overlaySection() {
+  const O = app.overlay, t = O && app.catalog.find((x) => x.id === O.id);
+  const kids = [h('button', { class: 'pickrow', onclick: openOverlayPicker }, h('span', { class: 'sw', style: { background: t ? swatchBg(t) : 'transparent', border: t ? '' : '2px dashed var(--line2)' } }),
+    h('span', null, h('small', null, 'Map laid on top'), h('b', null, t ? t.label : 'None')), h('span', { class: 'prchg' }, t ? 'Change' : 'Add'))];
+  if (t) {
+    const out = h('b', null, Math.round(O.alpha * 100) + '%');
+    kids.push(h('label', { class: 'slider' }, 'Strength', h('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: O.alpha, oninput: (e) => { O.alpha = +e.target.value; out.textContent = Math.round(O.alpha * 100) + '%'; clearTimeout(app._ovT); app._ovT = setTimeout(refresh, 60); } }), out),
+      h('div', { class: 'btns' }, btn('Remove overlay', () => { app.overlay = null; refresh(); refreshPanels(); }, 'sm')));
+  }
+  return section('Overlay', ...kids);
+}
+function openOverlayPicker() {
+  rebuildCatalog();
+  const list = h('div', { class: 'tlist' });
+  const tag = { cells: '', provinces: 'regions', counties: 'US counties' };
+  const draw = (q) => {
+    list.innerHTML = ''; q = (q || '').toLowerCase().trim();
+    if (!q && app.overlay) list.append(h('button', { class: 'titem', onclick: () => { app.overlay = null; closeModal(); refresh(); refreshPanels(); } }, h('span', { class: 'swatch', style: { border: '2px dashed var(--line2)' } }), h('span', null, 'No overlay')));
+    let g = null, n = 0;
+    for (const t of app.catalog) {
+      if (!overlayable(t) || t.id === 'nations') continue;
+      if (q && !(t.label.toLowerCase().includes(q) || t.group.toLowerCase().includes(q))) continue;
+      if (++n > 400) break;
+      if (t.group !== g) { g = t.group; list.append(h('div', { class: 'tgroup' }, g === 'Simulation' ? 'World' : g)); }
+      list.append(h('button', { class: 'titem' + (app.overlay && app.overlay.id === t.id ? ' on' : ''), onclick: () => { app.overlay = { id: t.id, alpha: app.overlay ? app.overlay.alpha : 0.55 }; closeModal(); refresh(); refreshPanels(); } },
+        h('span', { class: 'swatch' + (t.kind === 'cat' ? ' cat' : ''), style: { background: swatchBg(t) } }), h('span', null, t.label), h('small', null, tag[t.layer])));
+    }
+    if (!list.children.length) list.append(h('p', { class: 'muted' }, 'No maps match.'));
+  };
+  const search = h('input', { class: 'search', placeholder: 'Search maps…', oninput: () => draw(search.value) });
+  draw('');
+  openModal('Lay a map on top', h('div', null, h('p', { class: 'muted small' }, 'It shows see-through over the map you are editing, so you can paint borders along rivers, population or climate.'), search, list));
+}
+
 function defaultValue(a) { return a === 'pop' ? 2 : a === 'dev' ? 0.8 : a === 'lean' ? 0 : a === 'terrain' ? 6 : 1; }
 function autoTheme() { const m = { dev: 'dev', pop: 'density', lean: 'lean', terrain: 'terrain' }; setTheme(m[app.dataAttr] || 'cu_' + app.dataAttr); }
 function valueControl() {
@@ -1164,10 +1239,10 @@ function renderNationEditor(b) {
   const colors = [[214, 84, 84], [232, 140, 60], [226, 196, 72], [120, 186, 90], [52, 150, 110], [60, 170, 190], [70, 120, 210], [120, 96, 210], [180, 90, 190], [210, 110, 150], [150, 120, 90], [130, 140, 150]];
   b.append(h('div', { class: 'card' },
     h('label', { class: 'field' }, 'Name', h('input', { value: n.name, onchange: (e) => { n.name = e.target.value || n.name; rebuildCatalog(); app.R.dirty(); refreshPanels(); } })),
-    h('div', { class: 'swatches' }, colors.map((c) => h('button', { style: { background: hex(c) }, onclick: () => { n.color = c; rebuildCatalog(); refresh(); } })), h('input', { type: 'color', value: hex(n.color), onchange: (e) => { n.color = parseHex(e.target.value); rebuildCatalog(); refresh(); } })),
+    h('div', { class: 'swatches', role: 'group', 'aria-label': 'Colour' }, colors.map((c) => h('button', { class: hex(c) === hex(n.color) ? 'on' : '', 'aria-label': 'Colour ' + hex(c), style: { background: hex(c) }, onclick: () => { n.color = c; rebuildCatalog(); refresh(); refreshPanels(); } })), h('input', { type: 'color', 'aria-label': 'Any colour', value: hex(n.color), onchange: (e) => { n.color = parseHex(e.target.value); rebuildCatalog(); refresh(); refreshPanels(); } })),
     h('label', { class: 'field' }, 'Government', h('select', { onchange: (e) => { n.gov = e.target.value; refreshPanels(); } }, GOVS.map((g) => h('option', { selected: g === n.gov }, g)))),
     h('label', { class: 'slider' }, 'Stability', h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: n.stab, onchange: (e) => { n.stab = +e.target.value; refresh(); } })),
-    n.gov === 'Republic' ? h('div', { class: 'btns' }, btn('Call an election', () => { import('./sim.js').then((m) => { m.holdElection(W, n); refreshPanels(); toast(W.news[0].t, 4000); }); })) : null,
+    n.gov === 'Republic' ? h('div', { class: 'btns' }, btn('Call an election', () => { import('./sim.js').then((m) => { const before = W.news.length && W.news[0]; m.holdElection(W, n); refreshPanels(); const news = W.news.length && W.news[0] !== before ? W.news[0].t : n.seats && n.parties && n.parties[n.ruling] ? `Election in ${n.name}: ${n.parties[n.ruling].name} wins ${n.seats[n.ruling]} of ${n.seats.reduce((a, b) => a + b, 0)} seats.` : `No votes to count in ${n.name}.`; toast(news, 4000); }).catch((e) => toast('Could not hold the election: ' + e.message, 4000)); })) : null,
     h('div', { class: 'btns' },
       btn('Move capital', () => { app.editTool = 'capital'; refreshPanels(); }),
       btn('Annex a nation…', () => chooseNation(`${n.name} annexes…`, (id) => { const t = W.nations[id]; if (id === n.id || !t) return; annex(W, n, t); addNews(W, `${n.name} annexes ${t.name}.`, 'war', [n.id, id]); computeAggregates(W); computeAdjacency(W); app.aggStamp++; rebuildCatalog(); refresh(); refreshPanels(); })),
@@ -1209,7 +1284,7 @@ export function openThemeBrowser() {
   rebuildCatalog();
   const list = h('div', { class: 'tlist' });
   const search = h('input', { class: 'search', placeholder: `Search ${app.catalog.length.toLocaleString()} maps…`, oninput: () => draw(search.value) });
-  const layerNames = { cells: '🌐', provinces: '🗺', counties: '🇺🇸' };
+  const layerNames = { cells: '', provinces: 'regions', counties: 'US counties', precincts: 'precincts', level: 'local areas' };
   function draw(q) {
     list.innerHTML = ''; q = (q || '').toLowerCase().trim();
     const groups = new Map();
@@ -1218,7 +1293,7 @@ export function openThemeBrowser() {
       if (!groups.has(t.group)) groups.set(t.group, []); groups.get(t.group).push(t);
     }
     for (const [g, ts] of groups) {
-      list.append(h('div', { class: 'tgroup' }, g));
+      list.append(h('div', { class: 'tgroup' }, g === 'Simulation' ? 'World' : g));
       for (const t of ts.slice(0, q ? 60 : 400)) list.append(h('button', { class: 'titem' + (t.id === app.themeId ? ' on' : ''), onclick: () => { closeModal(); setTheme(t.id); if (t.layer === 'counties') app.R.fitBounds(-125, 24, -66, 50); } },
         h('span', { class: 'swatch' + (t.kind === 'cat' ? ' cat' : ''), style: { background: swatchBg(t) } }), h('span', null, t.label), h('small', null, layerNames[t.layer])));
       if (ts.hiddenCount) list.append(h('button', { class: 'titem more', onclick: () => { app.expandGroup = g; draw(''); } }, `Show ${ts.hiddenCount} more…`));
@@ -1227,7 +1302,7 @@ export function openThemeBrowser() {
   }
   draw('');
   openModal('All maps', h('div', null, search, h('div', { class: 'btns' }, btn('＋ Formula map', openFormula), btn('＋ Paintable data layer', openNewLayer)), list));
-  setTimeout(() => search.focus(), 50);
+  if (window.innerWidth >= 760) setTimeout(() => search.focus(), 50); // on a phone the keyboard would cover the list
 }
 function openFormula() {
   const st = { name: 'My map', layer: 'cells', expr: 'pop / area', log: false, diverging: false };
@@ -1260,7 +1335,7 @@ function openNewLayer() {
     }, 'primary wide')));
 }
 
-function chooseNation(title, cb, allowNone, allowNew) {
+function chooseNation(title, cb, allowNone, allowNew, onPick) {
   const W = app.W; const list = h('div', { class: 'tlist' });
   const draw = (q) => {
     list.innerHTML = ''; q = (q || '').toLowerCase();
@@ -1270,7 +1345,7 @@ function chooseNation(title, cb, allowNone, allowNew) {
   };
   const search = h('input', { class: 'search', placeholder: 'Search nations…', oninput: () => draw(search.value) });
   draw('');
-  openModal(title, h('div', null, search, list));
+  openModal(title, h('div', null, search, onPick ? btn([h('span', { class: 'ic', html: ICON.dropper }), 'Tap a nation on the map instead'], () => { closeModal(); onPick(); }, 'wide') : null, list));
 }
 
 // ------------------------------------------------------------------ menu, saves, files
@@ -1279,7 +1354,7 @@ function openMenu() {
   const slots = h('div', { class: 'tlist' }, h('p', { class: 'muted small' }, 'Loading saves…'));
   listSlots().then((all) => {
     slots.innerHTML = '';
-    if (!all.length) slots.append(h('p', { class: 'muted small' }, 'No saved worlds yet.'));
+    if (!all.length) slots.append(h('p', { class: 'muted small' }, 'No saved copies yet. Save keeps a copy you can come back to.'));
     for (const s of all) slots.append(h('div', { class: 'slot' }, h('button', { class: 'titem', onclick: async () => { const S = await getSlot(s.key); try { const w = deserialize(app.D, S); setWorld(w); closeModal(); refreshPanels(); toast(`Loaded “${w.name}”`); } catch (e) { toast('Could not load: ' + e.message); } } },
       h('span', null, s.key === 'autosave' ? `Autosave — ${s.name}` : s.name), h('small', null, `${dateOf(s.month, s.startYear)} · ${s.nations} nations`)),
       s.key !== 'autosave' ? h('button', { class: 'x', onclick: async () => { if (confirm('Delete this save?')) { await delSlot(s.key); openMenu(); } } }, '×') : null));
@@ -1290,15 +1365,15 @@ function openMenu() {
   } });
   const ago = app.lastAutosave ? Math.round((Date.now() - app.lastAutosave) / 60000) : null;
   openModal('Atlas Forge', h('div', { class: 'form' },
-    h('div', { class: 'muted small' }, ago == null ? 'Autosaves while you play.' : `Autosaved ${ago < 1 ? 'just now' : ago + ' min ago'}.`),
-    h('label', null, 'World name', h('input', { value: W.name, onchange: (e) => { W.name = e.target.value || W.name; } })),
+    h('div', { class: 'muted small' }, ago == null ? 'Your work saves automatically on this phone.' : `Autosaved ${ago < 1 ? 'just now' : ago + ' min ago'}.`),
+    h('label', null, 'Name of this map', h('input', { value: W.name, onchange: (e) => { W.name = e.target.value || W.name; } })),
     h('div', { class: 'btns' },
       btn('Save', async () => { await putSlot('w_' + Date.now(), serialize(W)); toast('Saved'); openMenu(); }, 'primary'),
       btn('Export file', async () => { toast('Packing…'); const b = await exportBlob(W); saveFile((W.name || 'world').replace(/\W+/g, '_') + '.atlas', b); }),
       btn('Import file', () => fileIn.click()), fileIn,
-      btn('New world', () => openNewWorld()),
+      btn('Start over', () => openNewWorld()),
       btn('Show the start screen', () => { try { localStorage.removeItem('af_welcome'); } catch {} closeModal(); setFull(false); setMode('explore'); setSheet('half'); refreshPanels(); })),
-    h('div', { class: 'sec-t' }, 'Saved worlds'), slots,
+    h('div', { class: 'sec-t' }, 'Saved copies'), slots,
     h('details', { class: 'sec' }, h('summary', null, 'About & data'), h('p', { class: 'muted small' }, `Atlas Forge — draw districts and run history on a ${W.Wd}×${W.Hd} grid of the real Earth. Borders, provinces, cities, terrain: Natural Earth (public domain). US counties and populations: US Census Bureau. Country population/GDP: Natural Earth (2019–2021 estimates). Cell populations are modelled from those figures.`))));
 }
 function openNewWorld() {

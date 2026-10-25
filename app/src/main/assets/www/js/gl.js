@@ -144,6 +144,13 @@ export class MapRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.texGroup); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, y0, w, y1 - y0 + 1, gl.RGBA, gl.UNSIGNED_BYTE, groups.subarray(a, b));
     this.dirty();
   }
+  // A second map laid over everything (Edit → Overlay): its own colour texture drawn after the polygons.
+  setOverlay(rgba, alpha) {
+    if (!rgba) { if (this.overlay) { this.overlay = null; this.dirty(); } return; }
+    if (!this.texOverlay) this.texOverlay = this._makeTex();
+    if (!this._same('ovC', rgba)) { const gl = this.gl; gl.bindTexture(gl.TEXTURE_2D, this.texOverlay); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gw, this.gh, gl.RGBA, gl.UNSIGNED_BYTE, rgba); }
+    this.overlay = { alpha }; this.dirty();
+  }
   setCellGroups(rgba) { if (this._same('cellG', rgba)) return; const gl = this.gl; gl.bindTexture(gl.TEXTURE_2D, this.texGroup); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gw, this.gh, gl.RGBA, gl.UNSIGNED_BYTE, rgba); this.dirty(); }
 
   // geom: {pos Float32Array, uid Uint16Array, idx Uint32Array, lpos Float32Array, luid Uint16Array}
@@ -346,6 +353,21 @@ export class MapRenderer {
       if (M) gl.disable(gl.STENCIL_TEST);
     }
     if (M) gl.disable(gl.STENCIL_TEST);
+    // overlay map: the same raster, its own colours, see-through, on top of the polygons
+    if (this.overlay && this.texOverlay) {
+      if (M) { gl.enable(gl.STENCIL_TEST); gl.stencilFunc(gl.EQUAL, 1, 0xff); gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP); }
+      P = this.prog.raster; gl.useProgram(P.p); this._disableAttrs();
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.rasterBuf);
+      gl.enableVertexAttribArray(P.a.a_pos); gl.vertexAttribPointer(P.a.a_pos, 2, gl.FLOAT, false, 16, 0);
+      gl.enableVertexAttribArray(P.a.a_tex); gl.vertexAttribPointer(P.a.a_tex, 2, gl.FLOAT, false, 16, 8);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.texOverlay); gl.uniform1i(P.u.u_color, 0);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.texGroup); gl.uniform1i(P.u.u_group, 1);
+      gl.uniform2f(P.u.u_size, this.gw, this.gh); gl.uniform1f(P.u.u_grid, 0); gl.uniform1f(P.u.u_bpx, 0); gl.uniform1f(P.u.u_dpx, 0);
+      gl.uniform3fv(P.u.u_bcol, this.opts.borderColor); gl.uniform1f(P.u.u_dim, 0); gl.uniform1f(P.u.u_op, this.overlay.alpha);
+      for (const o of offs) { this._common(P, o); gl.drawArrays(gl.TRIANGLES, 0, this.rasterCount); }
+      this._disableAttrs(); gl.activeTexture(gl.TEXTURE0);
+      if (M) gl.disable(gl.STENCIL_TEST);
+    }
     // lines
     P = this.prog.line; gl.useProgram(P.p);
     for (const L of Object.values(this.lines)) {

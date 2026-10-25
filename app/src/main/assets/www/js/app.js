@@ -104,7 +104,7 @@ export function autosave() { try { app.lastAutosave = Date.now(); return putSlot
 
 // ---------------------------------------------------------------- themes & colours
 export const theme = () => {
-  if (LV.level && app.mode !== 'draw') { const t = LEVEL_THEMES.find((x) => x.id === app.themeId) || LEVEL_THEMES[0]; return { ...t, layer: 'level', group: 'Map level', value: () => NaN, catColor: () => [0, 0, 0], catLabel: () => '' }; }
+  if (LV.level && app.mode === 'explore') { const t = LEVEL_THEMES.find((x) => x.id === app.themeId) || LEVEL_THEMES[0]; return { ...t, layer: 'level', group: 'Map level', value: () => NaN, catColor: () => [0, 0, 0], catLabel: () => '' }; }
   return app.catalog.find((t) => t.id === app.themeId) || app.catalog[0];
 };
 export async function chooseLevel(level) {
@@ -190,7 +190,7 @@ export function restoreHistory() {
 }
 function refreshInner() {
   const W = app.W, D = app.D, t = theme(), land = W.land, N = W.N;
-  if (LV.level && app.mode !== 'draw') return refreshLevelView();
+  if (LV.level && app.mode === 'explore') return refreshLevelView();
   const poly = polyLayerShown(), p = app.mode === 'draw' ? plan() : null;
   const base = app.baseRGBA, out = app.cellRGBA, grp = app.groupRGBA;
   // ---- cell base colours
@@ -217,6 +217,7 @@ function refreshInner() {
     app.R.setPolyColors(poly, arr);
     app.R.polys[poly].alpha = 0.93;
   }
+  applyOverlay(land, N);
   app.R.opts.grid = app.show.grid && !app.smooth && app.mode !== 'draw' && !(app.basemap && app.basemap.online);
   if (app.R.points) app.R.points.visible = app.show.cities && app.mode !== 'draw' && !(app.basemap && app.basemap.hasLabels);
   app.R.thick.realBorders.visible = (app.show.borders && app.smooth !== 'owner') || (!!p && p.unit === 'provinces' && app.drawOpts.boundaries);
@@ -229,6 +230,25 @@ function refreshInner() {
   app.R.dirty();
 }
 
+// Edit → Overlay: another map laid see-through over the nations (cell maps as a second raster, region and
+// county maps as their polygons on top).
+export const overlayable = (t) => t && ['cells', 'provinces', 'counties'].includes(t.layer) && !t.id.startsWith('plan_');
+function applyOverlay(land, N) {
+  const O = app.overlay, t = app.mode === 'edit' && O ? app.catalog.find((x) => x.id === O.id) : null;
+  app.overlayLegend = null;
+  if (!overlayable(t)) { app.R.setOverlay(null); return; }
+  if (t.layer === 'cells') {
+    const buf = app.ovRGBA || (app.ovRGBA = new Uint8Array(app.cellRGBA.length)); buf.fill(0);
+    app.overlayLegend = colorize(t, land, N, t.value, buf);
+    app.R.setOverlay(buf, O.alpha);
+  } else {
+    app.R.setOverlay(null);
+    const LY = layerFor(t.layer), arr = app.unitRGBA[t.layer]; if (!LY || !arr || !app.R.polys[t.layer]) return;
+    app.overlayLegend = colorize(t, null, LY.units.length, t.value, arr);
+    app.R.setPolyColors(t.layer, arr); app.R.polys[t.layer].visible = true; app.R.polys[t.layer].alpha = O.alpha;
+  }
+  app.overlayLegend.label = t.label;
+}
 // Map-level view: the cell grid becomes a quiet backdrop; admin areas are coloured on top.
 function refreshLevelView() {
   const W = app.W, base = app.baseRGBA, land = W.land;
@@ -475,7 +495,7 @@ function drawLabels(ctx, R) {
   if (p && app.planCentroids) for (const c of app.planCentroids) { if (!c) continue; const [x, y] = R.worldToScreen(c[0], c[1]); label(String(c[2] + 1), x, y, 15, '#fff', 800); }
   if (!app.show.labels) return;
   // admin-area names in the map-level view
-  if (LV.level && app.mode !== 'draw') {
+  if (LV.level && app.mode === 'explore') {
     let drawn = 0;
     for (const [P, u] of levelLabels(app)) {
       const lat = unMercY(P.cy[u]), pxKm = scale / (40075 * Math.cos(lat * Math.PI / 180)), span = Math.sqrt(P.area[u] || 0) * pxKm;
@@ -720,7 +740,7 @@ function onTap(px, py) {
       if (ch.size) { app.undo.push({ tgt: 'plan', changes: ch, plan: p.id }); app.redo = []; refresh(); scheduleStats(); }
       return;
     }
-    if (app.tool === 'pick') { if (p.assign[u] >= 0) { app.district = p.assign[u]; UI.refreshPanels(); } return; }
+    if (app.tool === 'pick') { if (p.assign[u] >= 0) { app.district = p.assign[u]; app.tool = 'brush'; UI.toast(`Painting district ${p.assign[u] + 1}`); UI.refreshPanels(); } else UI.toast('That area has no district yet. Tap a coloured one'); return; }
     if (app.tool === 'pan') { select(p.unit === 'cells' ? { cell: i, nation: W.owner[i] } : { unit: u, layer: p.unit, cell: i }); UI.showInfo(); }
     return;
   }
@@ -735,7 +755,7 @@ function onTap(px, py) {
   const poly = polyLayerShown();
   if (poly) { const u = pickUnit(poly, wx, wy); if (u >= 0) { select({ unit: u, layer: poly, cell: i, nation: i >= 0 ? W.owner[i] : 0 }); UI.showInfo(); return; } }
   if (i >= 0 && W.D.cells.country[i]) {
-    if (app.mode === 'edit' && app.editTool === 'borders' && app.tool === 'pick') { app.paintNation = W.owner[i]; app.tool = 'brush'; UI.refreshPanels(); return; }
+    if (app.mode === 'edit' && app.editTool === 'borders' && app.tool === 'pick') { app.paintNation = W.owner[i]; app.paintChosen = true; app.tool = 'brush'; { const n = W.nations[W.owner[i]]; UI.toast(`Painting land for ${n && n.alive ? n.name : 'nobody (unclaimed)'}`); } UI.refreshPanels(); return; }
     select({ cell: i, nation: W.owner[i] }); UI.showInfo();
   }
 }
