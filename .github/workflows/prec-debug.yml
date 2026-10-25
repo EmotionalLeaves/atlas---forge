@@ -1,0 +1,23 @@
+name: Precinct debug 2
+on:
+  push:
+    branches: [precdebug2]
+permissions:
+  contents: write
+jobs:
+  dbg:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Inspect
+        run: |
+          mkdir -p /tmp/out; node tools/dbg/dbf.mjs > /tmp/out/dbf.txt 2>&1 || true
+      - name: Keep the output
+        if: always()
+        run: |
+          cd /tmp/out && git init -q && git checkout -q -b ci-log-prec
+          git config user.name ci && git config user.email ci@users.noreply.github.com
+          git add . && git commit -qm "prec debug" && git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" ci-log-prec
