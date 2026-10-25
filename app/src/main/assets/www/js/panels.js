@@ -6,7 +6,7 @@ import { app, setTheme, refresh, theme, plan, select, undoRedo, scheduleStats, c
 import { packList } from './precincts.js';
 import { rel, setRel, computeAggregates, computeAdjacency, newNation, cellLngLat, addNews, GOVS, prodOf, MAXN, warBetween } from './world.js';
 import { declareWar, endWar, annex, DISASTERS } from './sim.js';
-import { newPlan, setDistrictCount, autoFill, randomPlan, UNIT_TYPES, planStats, unitCenter, PARENT_NAME, planSplits, importCSV, applyRealPlan, planLayer, PRECINCT_COLORS } from './plans.js';
+import { newPlan, setDistrictCount, autoFill, randomPlan, UNIT_TYPES, planStats, unitCenter, PARENT_NAME, PARENT_PLURAL, planSplits, importCSV, applyRealPlan, planLayer, PRECINCT_COLORS, defaultElection } from './plans.js';
 import { FORMULA_VARS, compileFormula, unitAgg } from './themes.js';
 import { listSlots, getSlot, putSlot, delSlot, serialize, deserialize, exportBlob, importBlob } from './store.js';
 import { createWorld } from './world.js';
@@ -26,6 +26,13 @@ const ICON = {
   minus: '<svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>',
   home: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/></svg>',
   search: '<svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg>',
+  hand: '<svg viewBox="0 0 24 24"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V11M11 10V4a1.5 1.5 0 0 1 3 0v6M14 10V5.5a1.5 1.5 0 0 1 3 0V12M17 9.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1.5a6 6 0 0 1-4.6-2.2L4.5 15.5a1.5 1.5 0 0 1 2.3-2l1.2 1.4"/></svg>',
+  brush: '<svg viewBox="0 0 24 24"><path d="M18.5 3.5l2 2L11 15l-2-2zM9 13c-2.5 0-4 1.6-4 4 0 1.5-1 2.5-2 3 3.5.5 8-.5 8-5"/></svg>',
+  eraser: '<svg viewBox="0 0 24 24"><path d="M15 4l5 5-9 9H6l-3-3zM9 8l7 7M6 18h14"/></svg>',
+  bucket: '<svg viewBox="0 0 24 24"><path d="M4 11l7-7 8 8-7 7a2 2 0 0 1-2.8 0L4 13.8A2 2 0 0 1 4 11zM4 12h15M20 15s2 2.2 2 3.5a2 2 0 0 1-4 0c0-1.3 2-3.5 2-3.5z"/></svg>',
+  dropper: '<svg viewBox="0 0 24 24"><path d="M14 4l6 6-2 2-6-6zM12 8l-7.5 7.5L4 20l4.5-.5L16 12"/></svg>',
+  undo: '<svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></svg>',
+  redo: '<svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5M20 9H10a6 6 0 0 0 0 12h3"/></svg>',
   trophy: '<svg viewBox="0 0 24 24"><path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H4c0 3 2 5 4 5M16 6h4c0 3-2 5-4 5M12 13v4M8 20h8"/></svg>',
 };
 const icon = (k) => h('span', { class: 'ic', html: ICON[k] });
@@ -41,37 +48,65 @@ export function init() {
   fl.append(h('button', { class: 'fab', 'aria-label': 'Search places', onclick: openSearch, html: ICON.search }),
     h('button', { class: 'fab', 'aria-label': 'Zoom in', onclick: () => app.R.zoomAt(...app.R.visibleCenter, 2), html: ICON.plus }),
     h('button', { class: 'fab', 'aria-label': 'Zoom out', onclick: () => app.R.zoomAt(...app.R.visibleCenter, 0.5), html: ICON.minus }),
-    h('button', { class: 'fab', 'aria-label': 'Whole world', onclick: () => app.R.flyTo(15, 25, 1), html: ICON.home }));
+    h('button', { class: 'fab', 'aria-label': 'Whole world', onclick: worldView, html: ICON.home }));
   // keep track of how much of the map the sheet covers so the camera frames the visible part
   const sheet = $('#sheet');
   const updPad = () => {
     const r = sheet.getBoundingClientRect(), wide = window.innerWidth >= 760;
     app.R.pad = wide ? { l: r.right, b: 0 } : { l: 0, b: Math.max(0, window.innerHeight - r.top) };
     $('#attr').style.bottom = (wide ? 6 : app.R.pad.b + 4) + 'px';
+    const ml = $('#mapLegend'); if (ml) { ml.style.bottom = (wide ? 12 : app.R.pad.b + 10) + 'px'; ml.style.left = (wide ? r.right + 12 : 10) + 'px'; }
   };
   if (window.ResizeObserver) new ResizeObserver(updPad).observe(sheet);
   window.addEventListener('resize', updPad); sheet.addEventListener('transitionend', updPad); updPad();
-  requestAnimationFrame(() => { updPad(); app.R.flyTo(15, 25, 1); });
-  $('#sheet .grab').onclick = () => $('#sheet').classList.toggle('collapsed');
+  requestAnimationFrame(() => { updPad(); worldView(); });
+  setupSheet();
   window.atlasBack = () => {
     if (!$('#modal').classList.contains('hidden')) { closeModal(); return true; }
     if (infoOpen) { hideInfo(); return true; }
-    if (app.running) { app.running = false; refreshPanels(); return true; }
+    if (app.running) { setRunning(false); return true; }
     if (app.mode !== 'explore') { setMode('explore'); return true; }
     autosave(); return false;
   };
   setMode('explore');
 }
 
+export function worldView() {
+  const R = app.R, p = R.pad || { l: 0, b: 0 }, w = R.vw / R.dpr - p.l, hh = R.vh / R.dpr - p.b;
+  const y0 = mercY(78), y1 = mercY(-56), sH = hh / (y1 - y0), sW = w; // css px per world unit
+  R.cam.s = Math.min(sH, sW * 1.3) * R.dpr * 0.98; R.clampCam(); R._centerOn(mercX(20), (y0 + y1) / 2); R.clampCam(); R.dirty();
+}
+// Bottom sheet with three heights: peek (just the essentials), half, and nearly full screen. Drag or tap the handle.
+const SHEET_H = { peek: () => 148, half: () => Math.round(window.innerHeight * 0.42), full: () => Math.round(window.innerHeight * 0.86) };
+export function setSheet(state) {
+  const sh = $('#sheet'); if (!sh) return;
+  app.sheet = state; sh.dataset.state = state; sh.style.height = SHEET_H[state]() + 'px';
+}
+function setupSheet() {
+  const sh = $('#sheet'), grab = sh.querySelector('.grab'); let y0 = 0, h0 = 0, moved = false, dragging = false;
+  grab.addEventListener('pointerdown', (e) => { dragging = true; moved = false; y0 = e.clientY; h0 = sh.getBoundingClientRect().height; grab.setPointerCapture(e.pointerId); sh.classList.add('dragging'); });
+  grab.addEventListener('pointermove', (e) => { if (!dragging) return; const dy = y0 - e.clientY; if (Math.abs(dy) > 4) moved = true; sh.style.height = Math.max(60, Math.min(window.innerHeight * 0.9, h0 + dy)) + 'px'; });
+  const end = () => {
+    if (!dragging) return; dragging = false; sh.classList.remove('dragging');
+    if (!moved) { setSheet(app.sheet === 'peek' ? 'half' : app.sheet === 'half' ? 'full' : 'peek'); return; }
+    const hNow = sh.getBoundingClientRect().height; let best = 'half', bd = Infinity;
+    for (const k of ['peek', 'half', 'full']) { const d = Math.abs(SHEET_H[k]() - hNow); if (d < bd) { bd = d; best = k; } }
+    setSheet(best);
+  };
+  grab.addEventListener('pointerup', end); grab.addEventListener('pointercancel', end);
+  window.addEventListener('resize', () => setSheet(app.sheet || 'half'));
+  setSheet('half');
+}
 export function setMode(m) {
   if (m === 'draw' && app.mode !== 'draw') { app.tool = plan() ? 'brush' : 'pan'; }
   else if (m !== 'draw' && m !== 'edit') app.tool = 'pan';
   if (m === 'edit' && app.mode !== 'edit') app.tool = 'pan';
   if (m !== 'sim' && app.histOwner) viewHistory(null);
+  if (m !== app.mode) { infoOpen = false; app.sel = null; }
   app.mode = m;
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
   document.body.dataset.mode = m;
-  $('#sheet').classList.remove('collapsed');
+  if (app.sheet === 'peek' && (m === 'draw' || m === 'edit')) setSheet('half');
   if (m === 'draw') { computePlanStats(); ensurePlanPack(); }
   refresh(); refreshPanels();
 }
@@ -82,8 +117,18 @@ export function toast(text, ms = 2600) {
 }
 
 // ------------------------------------------------------------------ render
+// Small floating legend on the map for maps that colour by value.
+function mapLegend() {
+  const el = $('#mapLegend'); if (!el) return; const L = app.legend, t = theme();
+  if (!L || L.type !== 'ramp' || app.mode === 'draw' || t.noLegend) { el.hidden = true; return; }
+  el.hidden = false; el.innerHTML = '';
+  const c = h('canvas', { width: 128, height: 1 }); const x = c.getContext('2d'); const img = x.createImageData(128, 1); const lut = rampLUT(L.ramp);
+  for (let i = 0; i < 128; i++) { const k = Math.round((L.invert ? 127 - i : i) * 255 / 127); img.data.set([lut[k * 3], lut[k * 3 + 1], lut[k * 3 + 2], 255], i * 4); } x.putImageData(img, 0, 0);
+  el.append(h('div', { class: 'ml-t' }, t.label), c, h('div', { class: 'ml-v' }, h('span', null, L.fmt(L.min)), h('span', null, L.fmt(L.max))));
+}
 export function refreshPanels() {
-  $('#date').textContent = dateLabel();
+  mapLegend();
+  $('#date').textContent = app.mode === 'draw' && plan() ? plan().name : dateLabel();
   const t = theme(); $('#themeBtn').innerHTML = ''; $('#themeBtn').append(h('span', { class: 'swatch ' + (t.kind === 'cat' ? 'cat' : '') , style: { background: swatchBg(t) } }), h('span', { class: 'tl' }, t.label), h('span', { class: 'caret' }, '▾'));
   const body = $('#sheetBody'); const scroll = body.scrollTop; body.innerHTML = '';
   if (infoOpen && app.sel) body.append(infoCard());
@@ -105,7 +150,8 @@ export function onTick() {
   }
 }
 export function onNews(n) {
-  const feed = $('#news'); if (!feed || app.mode !== 'sim') return;
+  const feed = $('#news'); if (!feed || app.mode !== 'sim' || !newsPass(n, app.newsFilter || 'major')) return;
+  if (feed.firstChild && feed.firstChild.classList && feed.firstChild.classList.contains('muted')) feed.innerHTML = '';
   feed.prepend(newsItem(n)); while (feed.children.length > 60) feed.lastChild.remove();
 }
 
@@ -120,7 +166,7 @@ function legendEl() {
   const L = app.legend; const t = theme();
   if (t.id === 'nations' || t.id === 'c_country') {
     const W = app.W, alive = W.nations.filter((n) => n && n.alive && n.cells > 0).length;
-    return h('div', { class: 'legend nat' }, h('span', null, t.id === 'nations' ? `${alive} nations today${W.wars.length ? ` · ${W.wars.length} at war` : ''}` : `${W.D.units.countries.length} countries as of 2026`), btn('Rankings ›', () => openRankings('pop'), 'sm'));
+    return h('div', { class: 'legend nat' }, h('span', null, t.id === 'nations' ? `${alive} nations · ${W.wars.length} ${W.wars.length === 1 ? 'war' : 'wars'}` : `${W.D.units.countries.length} countries as of 2026`), btn('Rankings ›', () => openRankings('pop'), 'sm'));
   }
   if (!L || t.noLegend) return h('div', { class: 'legend muted' }, t.desc || 'Each colour is a different area');
   if (L.type === 'ramp') {
@@ -139,10 +185,10 @@ export function mapStyleSection() {
   const st = app.settings, online = st.basemap !== 'none';
   const out = h('b', null, Math.round(st.opacity * 100) + '%');
   return section('Base map',
-    h('div', { class: 'chips' }, Object.entries(BASEMAPS).map(([k, b]) => h('button', { class: 'chip-s' + (st.basemap === k ? ' on' : ''), onclick: () => { st.basemap = k; saveSettings(); applyMapStyle(); refreshPanels(); } }, b.label))),
-    online ? h('label', { class: 'slider' }, 'Overlay', h('input', { type: 'range', min: 0, max: 1, step: 0.02, value: st.opacity, oninput: (e) => { st.opacity = +e.target.value; out.textContent = Math.round(st.opacity * 100) + '%'; app.R.opts.opacity = st.opacity; app.R.dirty(); }, onchange: saveSettings }), out) : null,
+    h('div', { class: 'chips' }, Object.entries(BASEMAPS).map(([k, b]) => h('button', { class: 'chip-s' + (st.basemap === k ? ' on' : ''), onclick: () => { st.basemap = k; app.basemapOffline = false; saveSettings(); applyMapStyle(); refreshPanels(); } }, b.label))),
+    online && !app.basemapOffline ? h('label', { class: 'slider' }, 'Overlay', h('input', { type: 'range', min: 0, max: 1, step: 0.02, value: st.opacity, oninput: (e) => { st.opacity = +e.target.value; out.textContent = Math.round(st.opacity * 100) + '%'; app.R.opts.opacity = st.opacity; app.R.dirty(); }, onchange: saveSettings }), out) : null,
     online && BASEMAPS[st.basemap].labels ? toggle('Place names on top', st.mapLabels, (v) => { st.mapLabels = v; saveSettings(); applyMapStyle(); }) : null,
-    online ? h('div', { class: 'muted small' }, 'Online map — needs internet. Built-in works offline.') : null);
+    app.basemapOffline && st.basemap !== 'none' ? h('div', { class: 'offline' }, 'Offline — showing the built-in map. ', h('button', { class: 'linkbtn', onclick: () => { app.basemapOffline = false; applyMapStyle(); refreshPanels(); } }, 'Try again')) : online ? h('div', { class: 'muted small' }, 'Online map — needs internet. Built-in works offline.') : null);
 }
 function welcomeCard() {
   let seen = false; try { seen = localStorage.getItem('af_welcome') === '1'; } catch {}
@@ -191,13 +237,17 @@ function nationBlock(n) {
   const bloc = n.bloc ? W.blocs[n.bloc] : null;
   const el = h('div', { class: 'nation' },
     row('Government', n.gov), row('Population', fmt(n.pop)), row('GDP', '$' + fmt(n.gdp * 1e6)), row('GDP per person', '$' + fmt(n.pop ? n.gdp * 1e6 / n.pop : 0)),
-    row('Military', fmt(n.mil)), h('div', { class: 'kv' }, h('span', null, 'Stability'), h('span', { class: 'bar' }, h('i', { style: { width: pct(n.stab), background: n.stab > 0.5 ? '#5fbf7a' : n.stab > 0.28 ? '#e8b448' : '#e2583c' } }))),
+    row('Military strength', `#${1 + app.W.nations.filter((x) => x && x.alive && x.mil > n.mil).length} in the world`), h('div', { class: 'kv' }, h('span', null, 'Stability'), h('span', { class: 'bar' }, h('i', { style: { width: pct(n.stab), background: n.stab > 0.5 ? '#5fbf7a' : n.stab > 0.28 ? '#e8b448' : '#e2583c' } }))),
     n.exh > 0.02 ? row('War exhaustion', pct(n.exh)) : null, row('Territory', `${n.cells.toLocaleString()} cells${n.occ > 0.01 ? ` (${pct(n.occ)} occupied)` : ''}`),
     bloc ? row('Alliance', bloc.name) : null,
     wars.length ? h('div', { class: 'kv war' }, h('span', null, 'At war with'), h('b', null, wars.join(', '))) : null,
     n.gov === 'Republic' ? h('div', { class: 'parties' }, n.parties.map((p, k) => h('span', { class: 'party' + (k === n.ruling ? ' rule' : '') }, dot(PARTY_COLORS[k]), p.name, n.votes ? ` ${Math.round(n.votes[k] * 100)}%` : ''))) : null,
   );
-  if (n.hist && n.hist.pop.length > 1) el.append(h('div', { class: 'sparks' }, h('div', null, h('small', null, 'Population'), spark(n.hist.pop, '#f1a03a')), h('div', null, h('small', null, 'Territory'), spark(n.hist.cells, '#6ab0e8'))));
+  const lab = (arr, f) => { const a = arr[0], z = arr[arr.length - 1]; return `${f(a)} → ${f(z)} (${z >= a ? '+' : ''}${a ? Math.round((z / a - 1) * 100) : 0}%)`; };
+  const y0 = app.W.startYear + Math.floor((n.hist.m[0] || 0) / 12);
+  if (n.hist && n.hist.pop.length > 1) el.append(h('div', { class: 'sparks' },
+    h('div', null, h('small', null, `Population since ${y0}`), spark(n.hist.pop, '#f1a03a'), h('small', { class: 'block' }, lab(n.hist.pop, fmt))),
+    h('div', null, h('small', null, `Territory since ${y0}`), spark(n.hist.cells, '#6ab0e8'), h('small', { class: 'block' }, lab(n.hist.cells, (v) => fmt(v) + ' cells')))));
   return el;
 }
 function infoCard() {
@@ -231,22 +281,22 @@ function infoCard() {
   }
   const i = s.cell, n = W.nations[W.owner[i]], [lng, lat] = cellLngLat(W, i);
   const cty = U.countries[C.country[i] - 1], prov = C.admin1[i] ? U.provinces[C.admin1[i] - 1] : null, county = C.county[i] ? U.counties[C.county[i] - 1] : null;
-  card.append(close, h('h3', null, n && n.alive ? [dot(n.color), n.name] : 'Unclaimed'),
-    h('div', { class: 'sub' }, `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? 'N' : 'S'} ${Math.abs(lng).toFixed(2)}°${lng >= 0 ? 'E' : 'W'} · ${U.terrains[W.terrain[i]]}${C.flags[i] & 1 ? ' · river' : ''}`),
-    h('div', { class: 'grid2' },
-      row('Cell population', fmt(W.pop[i])), row('Density', fmt(W.pop[i] / W.area[(i / W.Wd) | 0]) + '/km²'),
-      row('Development', W.dev[i].toFixed(2)), row('Income', '$' + fmt(prodOf(W.dev[i]))),
-      row('Political lean', leanText(W.lean[i])), row('Since 2026', W.pop0[i] ? ((W.pop[i] / W.pop0[i] - 1) * 100).toFixed(0) + '%' : '—')),
-    h('div', { class: 'sub' }, [prov ? prov.n : null, county ? county.n : null, cty ? (cty.name !== (n && n.name) ? 'historically ' + cty.name : cty.name) : null].filter(Boolean).join(' · ')),
-  );
-  for (const [k, arr] of Object.entries(W.custom)) card.append(row(k, fmt(arr[i], 2)));
+  const place = [prov ? prov.n : null, county ? county.n : null].filter(Boolean).join(', ') || (cty ? cty.name : 'This spot');
+  card.append(close, h('h3', null, n && n.alive ? [dot(n.color), n.name] : 'Unclaimed land'));
   if (n && n.alive) {
     card.append(nationBlock(n));
     card.append(h('div', { class: 'btns' },
       btn('Relations map', () => setTheme('rel_' + n.id)),
       btn('Zoom to', () => zoomToNation(n)),
-      app.mode === 'edit' ? btn('Paint as this', () => { app.paintNation = n.id; app.editTool = 'borders'; app.tool = 'brush'; refreshPanels(); }) : null));
+      app.mode === 'edit' ? btn('Paint as this', () => { app.paintNation = n.id; app.paintChosen = true; app.editTool = 'borders'; app.tool = 'brush'; refreshPanels(); }) : null));
   }
+  card.append(h('div', { class: 'sec-t' }, `This spot · ${place}`),
+    h('div', { class: 'sub' }, `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? 'N' : 'S'} ${Math.abs(lng).toFixed(2)}°${lng >= 0 ? 'E' : 'W'} · ${U.terrains[W.terrain[i]]}${C.flags[i] & 1 ? ' · river' : ''}${cty && n && cty.name !== n.name ? ' · historically ' + cty.name : ''}`),
+    h('div', { class: 'grid2' },
+      row('People here', fmt(W.pop[i])), row('Density', fmt(W.pop[i] / W.area[(i / W.Wd) | 0]) + '/km²'),
+      row('Development', W.dev[i].toFixed(2)), row('Income', '$' + fmt(prodOf(W.dev[i]))),
+      row('Political lean', leanText(W.lean[i])), row('Since 2026', W.pop0[i] ? ((W.pop[i] / W.pop0[i] - 1) * 100).toFixed(0) + '%' : '—')));
+  for (const [k, arr] of Object.entries(W.custom)) card.append(row(k, fmt(arr[i], 2)));
   return card;
 }
 const leanText = (v) => v < -0.05 ? `Left ${Math.round(-v * 100)}` : v > 0.05 ? `Right ${Math.round(v * 100)}` : 'Centre';
@@ -285,14 +335,56 @@ function zoomBoth(A, B) {
 function newsItem(n) {
   const W = app.W;
   return h('div', { class: 'news ' + n.k, onclick: () => { const id = n.n && n.n[0]; const nat = W.nations[id]; if (nat && nat.alive) { select({ cell: nat.capital, nation: id }); zoomToNation(nat); showInfo(); } } },
-    h('small', null, dateOf(n.m, W.startYear)), h('span', null, n.t));
+    h('small', null, h('b', { style: { color: (NEWS_KIND[n.k] || NEWS_KIND.info)[1] } }, (NEWS_KIND[n.k] || NEWS_KIND.info)[0]), ' · ', dateOf(n.m, W.startYear)), h('span', null, n.t));
+}
+const NEWS_KIND = { war: ['War', '#e2583c'], peace: ['Peace', '#5fbf7a'], election: ['Election', '#6ab0e8'], rebel: ['Uprising', '#c77dff'], coup: ['Coup', '#f2b544'], disaster: ['Disaster', '#ff8f3a'], alliance: ['Alliance', '#4fd1c5'], info: ['News', '#8a94a6'] };
+function newsPass(n, f) {
+  if (f === 'all') return true;
+  if (f === 'war') return n.k === 'war' || n.k === 'peace' || n.k === 'rebel';
+  if (f === 'politics') return n.k === 'election' || n.k === 'coup' || n.k === 'alliance' || n.k === 'info';
+  if (f === 'disaster') return n.k === 'disaster';
+  return n.k !== 'election' || /change of government/.test(n.t); // headlines: skip routine re-elections
+}
+// Play / pause; pausing shows what changed since play was pressed.
+export function setRunning(on) {
+  const W = app.W;
+  if (on && !app.running) {
+    const cells = new Map(); for (const n of W.nations) if (n && n.alive) cells.set(n.id, n.cells);
+    app.playSnap = { month: W.month, cells, newsLen: W.news.length, pop: W.nations.reduce((s2, n) => s2 + (n && n.alive ? n.pop : 0), 0) };
+    app.summary = null;
+  }
+  if (!on && app.running) { app.summary = makeSummary(); autosave(); }
+  app.running = on; refreshPanels();
+}
+function makeSummary() {
+  const W = app.W, S = app.playSnap; if (!S || W.month - S.month < 6) return null;
+  const newNews = W.news.slice(0, Math.max(0, W.news.length - S.newsLen + (W.news.length >= 400 ? 999 : 0))).filter((n) => n.m >= S.month);
+  const fallen = [...S.cells.keys()].filter((id) => !W.nations[id].alive).map((id) => W.nations[id]);
+  const born = W.nations.filter((n) => n && n.alive && !S.cells.has(n.id));
+  const deltas = W.nations.filter((n) => n && n.alive && S.cells.has(n.id)).map((n) => [n, n.cells - S.cells.get(n.id)]).sort((a, b) => b[1] - a[1]);
+  const pop = W.nations.reduce((s2, n) => s2 + (n && n.alive ? n.pop : 0), 0);
+  return { years: (W.month - S.month) / 12, wars: newNews.filter((n) => n.k === 'war').length, peace: newNews.filter((n) => n.k === 'peace').length, coups: newNews.filter((n) => n.k === 'coup').length,
+    fallen, born, gainers: deltas.filter((d) => d[1] > 0).slice(0, 3), losers: deltas.filter((d) => d[1] < 0).slice(-3).reverse(), popChange: pop / (S.pop || 1) - 1 };
+}
+function summaryCard(S) {
+  const yrs = S.years >= 1 ? `${S.years.toFixed(S.years < 10 ? 1 : 0)} years` : `${Math.round(S.years * 12)} months`;
+  const list = (arr) => arr.map(([n, d]) => h('span', { class: 'chg', onclick: () => { select({ cell: n.capital, nation: n.id }); zoomToNation(n); showInfo(); } }, dot(n.color), `${n.name} ${d > 0 ? '+' : ''}${d.toLocaleString()}`));
+  return h('div', { class: 'card slim summary' }, h('button', { class: 'x', onclick: () => { app.summary = null; refreshPanels(); } }, '×'),
+    h('h3', null, `What changed in ${yrs}`),
+    h('div', { class: 'kvrow' }, row('Wars started', S.wars), row('Peace deals', S.peace)),
+    h('div', { class: 'kvrow' }, row('Coups', S.coups), row('Population', (S.popChange >= 0 ? '+' : '') + pct(S.popChange, 1))),
+    S.fallen.length ? h('p', { class: 'small' }, h('b', null, 'Gone: '), S.fallen.slice(0, 8).map((n) => n.name).join(', '), S.fallen.length > 8 ? ` +${S.fallen.length - 8}` : '') : null,
+    S.born.length ? h('p', { class: 'small' }, h('b', null, 'New nations: '), S.born.slice(0, 8).map((n) => n.name).join(', '), S.born.length > 8 ? ` +${S.born.length - 8}` : '') : null,
+    S.gainers.length ? h('div', { class: 'chgs' }, h('small', null, 'Grew (cells)'), list(S.gainers)) : null,
+    S.losers.length ? h('div', { class: 'chgs' }, h('small', null, 'Shrank (cells)'), list(S.losers)) : null);
 }
 function renderSim(b) {
   const W = app.W;
   b.append(h('div', { class: 'simbar' },
-    h('button', { class: 'play' + (app.running ? ' on' : ''), onclick: () => { if (app.histOwner) viewHistory(null); app.running = !app.running; if (!app.running) autosave(); refreshPanels(); } }, app.running ? '❚❚' : '▶'),
-    seg([[1, '1×'], [2, '4×'], [3, '12×'], [4, 'Max']], app.speed, (v) => { app.speed = v; if (!app.running) app.running = true; refreshPanels(); }),
+    h('button', { class: 'play' + (app.running ? ' on' : ''), 'aria-label': app.running ? 'Pause' : 'Play', onclick: () => { if (app.histOwner) viewHistory(null); setRunning(!app.running); } }, app.running ? '❚❚' : '▶'),
+    seg([[1, '1×'], [2, '4×'], [3, '12×'], [4, 'Max']], app.speed, (v) => { app.speed = v; if (!app.running) setRunning(true); else refreshPanels(); }),
     h('button', { class: 'btn', onclick: () => step(12) }, '+1 yr')));
+  if (app.summary && !app.running) b.append(summaryCard(app.summary));
   b.append(worldStats());
   const T = W.timeline;
   if (T && T.deltas.length) {
@@ -309,9 +401,11 @@ function renderSim(b) {
   }
   b.append(section(null, quickThemes([['nations', 'Nations'], ['n_war', 'Wars'], ['n_bloc', 'Alliances'], ['n_stab', 'Stability'], ['n_ruling', 'Governing party'], ['n_gov', 'Governments'], ['occupied', 'Occupation'], ['growth', 'Growth'], ['dev', 'Development'], ['lean', 'Politics']])));
   if (!infoOpen) b.append(h('p', { class: 'muted small' }, 'Tap a nation to follow it. Wars, alliances, rebellions, coups and elections happen on their own — or force them in God mode.'));
-  const feed = h('div', { id: 'news' }, W.news.slice(0, 40).map(newsItem));
-  if (!W.news.length) feed.append(h('div', { class: 'muted small' }, 'No events yet. Press ▶ to start history.'));
-  b.append(section('World news', feed));
+  const F = app.newsFilter || 'major';
+  const items = W.news.filter((n) => newsPass(n, F)).slice(0, 50);
+  const feed = h('div', { id: 'news' }, items.map(newsItem));
+  if (!items.length) feed.append(h('div', { class: 'muted small' }, W.news.length ? 'Nothing of this kind yet.' : 'No events yet. Press ▶ to start history.'));
+  b.append(section('World news', h('div', { class: 'chips' }, [['major', 'Headlines'], ['war', 'Wars'], ['politics', 'Politics'], ['disaster', 'Disasters'], ['all', 'Everything']].map(([k, l]) => h('button', { class: 'chip-s' + (F === k ? ' on' : ''), onclick: () => { app.newsFilter = k; refreshPanels(); } }, l))), feed));
   const S = W.settings;
   b.append(h('details', { class: 'sec' }, h('summary', null, 'Simulation rules'), h('div', { class: 'tog-row' },
     toggle('Wars', S.wars, (v) => { S.wars = v; }), toggle('Rebellions', S.rebels, (v) => { S.rebels = v; }),
@@ -337,14 +431,14 @@ function renderDraw(b) {
   if (app.drawTab === 'pop') return renderPopTab(b, p, st);
   if (app.drawTab === 'layers') return renderLayersTab(b, p);
   if (app.drawTab === 'eval') return renderEvalTab(b, p, st);
-  const tools = [['pan', '✋', 'Move'], ['brush', '🖌', 'Paint'], ['erase', '⌫', 'Erase'], ['fill', '🪣', 'Fill'], ['pick', '💧', 'Pick']];
-  b.append(h('div', { class: 'tools' }, tools.map(([t, ic, l]) => h('button', { class: app.tool === t ? 'on' : '', onclick: () => { app.tool = t; refreshPanels(); } }, h('span', null, ic), h('small', null, l))),
-    h('button', { onclick: () => undoRedo(false), disabled: !app.undo.length }, h('span', null, '↶'), h('small', null, 'Undo')),
-    h('button', { onclick: () => undoRedo(true), disabled: !app.redo.length }, h('span', null, '↷'), h('small', null, 'Redo'))));
-  if (p.unit === 'cells' && ['brush', 'erase'].includes(app.tool)) b.append(brushSlider());
+  const tools = [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['erase', 'eraser', 'Erase'], ['fill', 'bucket', 'Fill'], ['pick', 'dropper', 'Pick']];
+  b.append(h('div', { class: 'tools' }, tools.map(([t, ic, l]) => h('button', { class: app.tool === t ? 'on' : '', onclick: () => { app.tool = t; refreshPanels(); } }, h('span', { class: 'ti', html: ICON[ic] || ic }), h('small', null, l))),
+    h('button', { onclick: () => undoRedo(false), disabled: !app.undo.length }, h('span', { class: 'ti', html: ICON.undo }), h('small', null, 'Undo')),
+    h('button', { onclick: () => undoRedo(true), disabled: !app.redo.length }, h('span', { class: 'ti', html: ICON.redo }), h('small', null, 'Redo'))));
+  if (['brush', 'erase'].includes(app.tool)) b.append(brushSlider());
   const O = app.drawOpts;
   b.append(h('div', { class: 'tog-row' },
-    toggle(`Paint whole ${PARENT_NAME[p.unit]}s`, O.parent, (v) => { O.parent = v; }),
+    toggle(`Paint whole ${PARENT_PLURAL[p.unit]}`, O.parent, (v) => { O.parent = v; }),
     toggle("Don't paint over other districts", O.noOverwrite, (v) => { O.noOverwrite = v; })));
   b.append(districtChips(p, st));
   if (p.unit === 'precincts') b.append(electionPicker(p));
@@ -367,7 +461,11 @@ function districtChips(p, st) {
   const chips = h('div', { class: 'districts' });
   for (let d = 0; d < p.n; d++) {
     const ds = st && st.districts[d];
-    chips.append(h('button', { class: 'dchip' + (d === app.district ? ' on' : '') + (p.locked[d] ? ' locked' : ''), style: { '--c': hex(p.colors[d]) }, onclick: () => { app.district = d; if (app.tool === 'pan' || app.tool === 'pick') app.tool = 'brush'; refreshPanels(); } },
+    let lp = 0, longed = false;
+    chips.append(h('button', { class: 'dchip' + (d === app.district ? ' on' : '') + (p.locked[d] ? ' locked' : ''), style: { '--c': hex(p.colors[d]) }, title: 'Long-press to lock',
+      onpointerdown: () => { longed = false; clearTimeout(lp); lp = setTimeout(() => { longed = true; p.locked[d] = !p.locked[d]; toast(`District ${d + 1} ${p.locked[d] ? 'locked' : 'unlocked'}`); refreshPanels(); }, 480); },
+      onpointerup: () => clearTimeout(lp), onpointerleave: () => clearTimeout(lp), oncontextmenu: (e) => e.preventDefault(),
+      onclick: () => { if (longed) return; app.district = d; if (app.tool === 'pan' || app.tool === 'pick') app.tool = 'brush'; refreshPanels(); } },
       h('b', null, d + 1), h('small', { class: ds && Math.abs(ds.dev) > 0.05 ? 'bad' : '' }, ds && ds.units ? (ds.dev >= 0 ? '+' : '') + (ds.dev * 100).toFixed(1) + '%' : '—')));
   }
   return chips;
@@ -395,6 +493,7 @@ function renderLayersTab(b, p) {
       toggle('Show data underneath (mix colours)', O.showData, (v) => { O.showData = v; redraw(); }),
       toggle('Hide districts', O.hideDistricts, (v) => { O.hideDistricts = v; redraw(); }),
       toggle('Highlight unassigned areas', O.highlightUnassigned, (v) => { O.highlightUnassigned = v; redraw(); }),
+      toggle('Colour districts by vote (blue ↔ red)', O.byVote, (v) => { O.byVote = v; redraw(); }),
       toggle(`Show ${p.unit === 'provinces' ? 'country' : 'province / state'} boundaries`, O.boundaries, (v) => { O.boundaries = v; redraw(); }))));
   const t = theme();
   b.append(section('Data layer', h('div', { class: 'paintwith' }, h('span', null, t.layer === (p.unit === 'cells' ? 'cells' : p.unit) ? t.label : 'Pick a map for these units'), btn('Choose ›', openThemeBrowser, 'sm')),
@@ -421,8 +520,15 @@ function renderEvalTab(b, p, st) {
       st.districts.filter((d) => d.units).map((d) => h('tr', null, h('td', null, h('span', { class: 'dot', style: { background: hex(p.colors[d.k]) } }), d.k + 1),
         ...st.raceLabels.map((_, k) => { const v = d.pop ? d.race[k] / d.pop : 0; return h('td', { class: v >= 0.5 && k > 0 ? 'maj' : '' }, pct(v)); })))))));
   }
+  if (st.contested) {
+    const N = st.partyNames, rowsV = st.districts.filter((d) => d.units).map((d) => { const t = d.votes[0] + d.votes[1] + d.votes[2] || 1; return { k: d.k, a: d.votes[0] / t, b: d.votes[2] / t }; });
+    b.append(section(`Votes by district${st.election ? ' · ' + st.election : ''}`, h('div', { class: 'scrollx' }, h('table', { class: 'tbl' },
+      h('tr', null, h('th', null, '#'), h('th', null, N[0] + ' %'), h('th', null, N[2] + ' %'), h('th', null, 'Margin')),
+      rowsV.sort((x, y) => (y.a - y.b) - (x.a - x.b)).map((r) => h('tr', { onclick: () => { app.district = r.k; zoomToDistrict(p, r.k); } }, h('td', null, h('span', { class: 'dot', style: { background: hex(p.colors[r.k]) } }), r.k + 1),
+        h('td', null, pct(r.a, 1)), h('td', null, pct(r.b, 1)), h('td', null, h('b', { style: { color: hex(pcol(st, r.a >= r.b ? 0 : 2)) } }, `${r.a >= r.b ? st.partyShort[0] : st.partyShort[2]} +${Math.round(Math.abs(r.a - r.b) * 100)}`))))))));
+  }
   if (st.contested) b.append(h('div', { class: 'card slim' }, h('div', { class: 'kv' }, h('span', null, 'Seats'), h('span', { class: 'seats' }, st.seats.map((n, k) => (n || k !== 1) ? h('b', { style: { color: hex(pcol(st, k)) } }, `${n} ${st.partyShort[k]}`) : null))), fairness(st, false)));
-  b.append(h('div', { class: 'btns' }, btn('Full table', openStats), btn('Export CSV', () => exportPlanCSV(p)), btn('Export report', () => exportReport(p, st, sp)), btn('Import CSV', () => importPlanCSV(p))));
+  b.append(h('div', { class: 'btns' }, btn('Full table', openStats), btn('Export CSV', () => exportPlanCSV(p)), btn('Export report', () => exportReport(p, st, sp))));
 }
 function exportReport(p, st, sp) {
   const rep = { plan: p.name, status: p.status || 'Scratch work', notes: p.notes || '', units: p.unit, area: p.scope ? app.W.D.units.countries[p.scope - 1].name : 'World', districts: p.n, date: dateLabel(),
@@ -440,15 +546,15 @@ function importPlanCSV(p) {
   document.body.append(inp); inp.click(); setTimeout(() => inp.remove(), 60000);
 }
 const scopeLabel = (p) => p.unit === 'precincts' ? `${planLayer(app.W, p) ? planLayer(app.W, p).pack.title : p.pack} precincts · ${p.n} districts` : `${UNIT_TYPES[p.unit]} · ${p.scope ? app.W.D.units.countries[p.scope - 1].name : 'whole world'} · ${p.n} districts${p.electionsUse && p.scope ? ' · used in this country\'s elections' : ''}`;
-function egText(eg) { const a = Math.abs(eg); return a < 0.02 ? 'balanced' : `${(a * 100).toFixed(1)}% toward ${eg > 0 ? 'Right' : 'Left'}`; }
+function egText(eg, st = app.stats) { const a = Math.abs(eg), N = st ? st.partyNames : ['Left', '', 'Right']; return a < 0.02 ? 'balanced' : `${(a * 100).toFixed(1)}% toward ${eg > 0 ? N[2] : N[0]}`; }
 function fairness(st, compact) {
   const seatsPct = st.seats.map((v) => v / Math.max(1, st.contested));
   const rows = [
     h('div', { class: 'vs' }, h('small', null, 'Votes'), voteBar(st.voteShare, st.parties)),
     h('div', { class: 'vs' }, h('small', null, 'Seats'), voteBar(seatsPct, st.parties)),
-    row('Efficiency gap', egText(st.eg)),
+    row('Efficiency gap', egText(st.eg, st)),
   ];
-  if (!compact) rows.push(row('Mean–median (Left share)', (st.meanMedian >= 0 ? '+' : '') + (st.meanMedian * 100).toFixed(1) + ' pts'), row('Competitive districts (<10% margin)', `${st.competitive} of ${st.contested}`));
+  if (!compact) rows.push(row(`Mean–median (${st.partyNames[0]} share)`, (st.meanMedian >= 0 ? '+' : '') + (st.meanMedian * 100).toFixed(1) + ' pts'), row('Competitive districts (<10% margin)', `${st.competitive} of ${st.contested}`));
   return h('div', { class: 'fair' }, rows);
 }
 const pcol = (st, k) => (st && st.partyColors ? st.partyColors : PARTY_COLORS)[k];
@@ -516,7 +622,7 @@ export function openPrecinctPicker() {
       closeModal(); toast(`Getting ${m.title} precincts…`, 8000);
       try {
         const P = await usePack(m.state, (fr, t) => toast(t, 8000));
-        setTheme(P.elections.length ? 'pc_e0' : 'pc_pop'); app.R.fitBounds(P.bbox[0], P.bbox[3], P.bbox[2], P.bbox[1]); toast(`${m.title}: ${m.count.toLocaleString()} precincts`);
+        setTheme(P.elections.length ? 'pc_e' + defaultElection(P) : 'pc_pop'); app.R.fitBounds(P.bbox[0], P.bbox[3], P.bbox[2], P.bbox[1]); toast(`${m.title}: ${m.count.toLocaleString()} precincts`);
       } catch (err) { toast(err.message, 5000); }
     } }, h('span', { class: 'kind' }, m.state), h('span', null, m.title, h('small', { class: 'block' }, `${m.count.toLocaleString()} precincts · ${m.elections.length} elections · ${m.plans.length} real maps`)), h('small', null, (m.bytes / 1048576).toFixed(1) + ' MB')));
   });
@@ -537,6 +643,7 @@ function openPlanMenu(p) {
       btn('Random plan', () => { randomPlan(W, p); app.undo = []; app.redo = []; closeModal(); computePlanStats(); refresh(); refreshPanels(); }),
       btn('Clear all', () => { if (confirm('Clear every district in this plan?')) { p.assign.fill(-1); app.undo = []; app.redo = []; closeModal(); computePlanStats(); refresh(); refreshPanels(); } }),
       btn('Export CSV', () => exportPlanCSV(p)),
+      btn('Import CSV', () => { closeModal(); importPlanCSV(p); }),
       btn('Show as map', () => { closeModal(); setTheme('plan_' + p.id); }),
       btn('Delete plan', () => { if (confirm('Delete this plan?')) { W.plans = W.plans.filter((x) => x !== p); app.activePlan = W.plans.length ? W.plans[0].id : null; rebuildCatalog(); closeModal(); computePlanStats(); refresh(); refreshPanels(); } }, 'danger')));
   openModal('Plan options', body);
@@ -565,19 +672,21 @@ export function refreshStats() { if (app.mode === 'draw' && !document.activeElem
 // ------------------------------------------------------------------ god mode
 function renderEdit(b) {
   const W = app.W;
-  b.append(seg([['borders', 'Borders'], ['data', 'Data'], ['disaster', 'Disasters'], ['nations', 'Nations'], ['diplomacy', 'Diplomacy']], ['release', 'capital'].includes(app.editTool) ? 'nations' : app.editTool, (v) => { app.editTool = v; app.tool = v === 'borders' || v === 'data' ? 'brush' : 'pan'; refreshPanels(); }));
+  b.append(seg([['borders', 'Borders'], ['data', 'Data'], ['disaster', 'Disaster'], ['nations', 'Nations'], ['diplomacy', 'Diplo']], ['release', 'capital'].includes(app.editTool) ? 'nations' : app.editTool, (v) => {
+    app.editTool = v; app.tool = (v === 'borders' && app.paintChosen) || v === 'data' ? 'brush' : 'pan';
+    if (v === 'data') autoTheme(); refreshPanels(); }));
   const et = app.editTool;
   if (et === 'borders') {
     const n = W.nations[app.paintNation];
-    b.append(h('div', { class: 'paintwith' }, h('span', null, 'Paint land for'), h('button', { class: 'btn', onclick: () => chooseNation('Paint land for…', (id) => { app.paintNation = id; app.tool = 'brush'; refreshPanels(); }, true, true) }, n ? [dot(n.color), n.name] : [dot([90, 90, 90]), 'Unclaimed'], ' ▾')));
-    b.append(editTools([['pan', '✋', 'Move'], ['brush', '🖌', 'Paint'], ['pick', '💧', 'Pick nation']]));
-    if (app.tool === 'brush') b.append(brushSlider());
+    b.append(h('div', { class: 'paintwith' }, h('span', null, 'Paint land for'), h('button', { class: 'btn' + (app.paintChosen ? '' : ' primary'), onclick: () => chooseNation('Paint land for…', (id) => { app.paintNation = id; app.paintChosen = true; app.tool = 'brush'; refreshPanels(); }, true, true) }, !app.paintChosen ? 'Choose a nation' : n ? [dot(n.color), n.name] : [dot([90, 90, 90]), 'Unclaimed (erase)'], ' ▾')));
+    if (app.paintChosen) b.append(editTools([['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['pick', 'dropper', 'Pick nation']]));
+    if (app.tool === 'brush' && app.paintChosen) b.append(brushSlider());
     b.append(h('p', { class: 'muted small' }, 'Paint to move borders. Use “Pick nation” then tap the map to paint as that nation.'));
   } else if (et === 'data') {
     const attrs = [['dev', 'Development'], ['pop', 'Population (multiply)'], ['lean', 'Political lean'], ['terrain', 'Terrain'], ...Object.keys(W.custom).map((k) => [k, k + ' (your layer)'])];
     b.append(h('label', { class: 'field' }, 'Paint', h('select', { onchange: (e) => { app.dataAttr = e.target.value; app.dataValue = defaultValue(app.dataAttr); refreshPanels(); autoTheme(); } }, attrs.map(([v, l]) => h('option', { value: v, selected: v === app.dataAttr }, l)))));
     b.append(valueControl());
-    b.append(editTools([['pan', '✋', 'Move'], ['brush', '🖌', 'Paint']]));
+    b.append(editTools([['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint']]));
     if (app.tool === 'brush') b.append(brushSlider());
     b.append(btn('＋ New data layer', openNewLayer, 'wide'));
   } else if (et === 'disaster') {
@@ -587,9 +696,9 @@ function renderEdit(b) {
   else if (et === 'diplomacy') renderDiplomacy(b);
 }
 function editTools(list) {
-  return h('div', { class: 'tools' }, list.map(([t, ic, l]) => h('button', { class: app.tool === t ? 'on' : '', onclick: () => { app.tool = t; refreshPanels(); } }, h('span', null, ic), h('small', null, l))),
-    h('button', { onclick: () => undoRedo(false), disabled: !app.undo.length }, h('span', null, '↶'), h('small', null, 'Undo')),
-    h('button', { onclick: () => undoRedo(true), disabled: !app.redo.length }, h('span', null, '↷'), h('small', null, 'Redo')));
+  return h('div', { class: 'tools' }, list.map(([t, ic, l]) => h('button', { class: app.tool === t ? 'on' : '', onclick: () => { app.tool = t; refreshPanels(); } }, h('span', { class: 'ti', html: ICON[ic] || ic }), h('small', null, l))),
+    h('button', { onclick: () => undoRedo(false), disabled: !app.undo.length }, h('span', { class: 'ti', html: ICON.undo }), h('small', null, 'Undo')),
+    h('button', { onclick: () => undoRedo(true), disabled: !app.redo.length }, h('span', { class: 'ti', html: ICON.redo }), h('small', null, 'Redo')));
 }
 function defaultValue(a) { return a === 'pop' ? 2 : a === 'dev' ? 0.8 : a === 'lean' ? 0 : a === 'terrain' ? 6 : 1; }
 function autoTheme() { const m = { dev: 'dev', pop: 'density', lean: 'lean', terrain: 'terrain' }; setTheme(m[app.dataAttr] || 'cu_' + app.dataAttr); }
@@ -737,7 +846,9 @@ function openMenu() {
     const f = e.target.files[0]; if (!f) return; toast('Importing…');
     try { const w = await importBlob(app.D, f); setWorld(w); closeModal(); refreshPanels(); toast(`Imported “${w.name}”`); } catch (err) { toast('Import failed: ' + err.message, 4000); }
   } });
+  const ago = app.lastAutosave ? Math.round((Date.now() - app.lastAutosave) / 60000) : null;
   openModal('Atlas Forge', h('div', { class: 'form' },
+    h('div', { class: 'muted small' }, ago == null ? 'Autosaves while you play.' : `Autosaved ${ago < 1 ? 'just now' : ago + ' min ago'}.`),
     h('label', null, 'World name', h('input', { value: W.name, onchange: (e) => { W.name = e.target.value || W.name; } })),
     h('div', { class: 'btns' },
       btn('💾 Save', async () => { await putSlot('w_' + Date.now(), serialize(W)); toast('Saved'); openMenu(); }, 'primary'),
@@ -784,9 +895,13 @@ export function openSearch() {
     U.provinces.forEach((p, u) => add('Province', p.n, `${p.t || 'Province'} · ${U.countries[p.c - 1] ? U.countries[p.c - 1].name : ''}`, sc(p.n), p.pop, () => goUnit('provinces', u, 4000)));
     U.counties.forEach((c, u) => add('County', `${c.n}, ${c.s}`, `US county · ${fmt(c.pop)}`, sc(`${c.n}, ${c.s}`), c.pop, () => goUnit('counties', u, 6000)));
     res.sort((a, b) => a.score - b.score || kinds[a.kind] - kinds[b.kind] || b.weight - a.weight);
-    for (const r of res.slice(0, 60)) list.append(h('button', { class: 'titem', onclick: () => { closeModal(); r.go(); } },
-      r.color ? dot(r.color) : h('span', { class: 'kind' }, r.kind[0]), h('span', null, r.name, h('small', { class: 'block' }, r.sub)), h('small', null, r.kind)));
+    const per = {}, capK = { Nation: 8, Country: 6, City: 15, Province: 10, County: 6 }, shown = [];
+    for (const r of res) { per[r.kind] = (per[r.kind] || 0) + 1; if (per[r.kind] <= capK[r.kind]) shown.push(r); }
+    const extra = Object.entries(per).filter(([k, c]) => c > capK[k]).map(([k, c]) => `+${c - capK[k]} more ${k.toLowerCase()}${c - capK[k] > 1 ? 's' : ''}`).join(' · ');
+    for (const r of shown) list.append(h('button', { class: 'titem', onclick: () => { closeModal(); r.go(); } },
+      r.color ? dot(r.color) : h('span', { class: 'kind k-' + r.kind.toLowerCase() }, { City: 'CITY', Country: 'LAND', Province: 'PROV', County: 'CNTY' }[r.kind] || r.kind[0]), h('span', null, r.name, h('small', { class: 'block' }, r.sub)), h('small', null, r.kind)));
     if (!res.length) list.append(h('p', { class: 'muted' }, 'Nothing found.'));
+    else if (extra) list.append(h('p', { class: 'muted small' }, extra + ' — type more to narrow it down.'));
   }
   draw('');
   openModal('Find a place', h('div', null, input, list));

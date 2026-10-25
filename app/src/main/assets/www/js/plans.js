@@ -20,7 +20,7 @@ export function newPlan(W, { name, unit, scope, n, pack }) {
   const L = unitLayer(W, unit, pack);
   const len = unit === 'cells' ? W.N : L.units.length;
   const p = { id: Date.now() % 1e9, name, unit, scope, n, assign: new Int16Array(len).fill(-1), locked: [], colors: [], electionsUse: unit !== 'precincts' };
-  if (unit === 'precincts') { p.pack = pack; p.election = 0; p.scope = 0; }
+  if (unit === 'precincts') { p.pack = pack; p.election = defaultElection(L.pack); p.scope = 0; }
   for (let k = 0; k < n; k++) p.colors.push(districtColor(k));
   W.plans.push(p); return p;
 }
@@ -322,6 +322,9 @@ export function parentUnits(W, p, u, provCells) {
   return D._byCountry.get(D.units.provinces[u].c) || [u];
 }
 export const PARENT_NAME = { cells: 'province', counties: 'state', provinces: 'country', precincts: 'county' };
+export const PARENT_PLURAL = { cells: 'provinces', counties: 'states', provinces: 'countries', precincts: 'counties' };
+// the most recent presidential race if there is one
+export function defaultElection(P) { const k = P.elections.findIndex((e) => /^President/.test(e.label)); return k >= 0 ? k : 0; }
 
 // How many parent areas (provinces / states / countries) are split between districts.
 export function planSplits(W, p, provCells) {

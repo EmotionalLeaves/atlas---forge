@@ -209,7 +209,7 @@ export class MapRenderer {
   clampCam() {
     const c = this.cam; c.s = Math.max(this.minScale, Math.min(this.maxScale, c.s));
     const half = this.vh / 2 / c.s, pb = ((this.pad && this.pad.b) || 0) * this.dpr / c.s;
-    c.y = half >= 0.5 ? 0.5 + pb / 2 : Math.max(half, Math.min(1 - half + pb, c.y));
+    c.y = half >= 0.5 ? Math.max(1 - half, Math.min(half + pb, c.y)) : Math.max(half, Math.min(1 - half + pb, c.y));
     c.x = ((c.x % 1) + 1) % 1;
   }
   // css px -> world

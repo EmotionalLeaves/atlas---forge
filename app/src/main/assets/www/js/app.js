@@ -63,7 +63,7 @@ export async function boot() {
     setWorld(W);
     app.R.onLabels = drawLabels;
     app.basemap = new Basemap(document.getElementById('tilesBase'), document.getElementById('tilesLabels'), document.getElementById('attr'));
-    app.basemap.onOffline = () => { UI.toast("Can't reach the online map right now — showing the built-in map", 4000); app.basemap.setStyle('none'); app.R.opts.opacity = 1; app.R.opts.grid = app.show.grid; if (app.R.points) app.R.points.visible = app.show.cities; app.R.dirty(); };
+    app.basemap.onOffline = () => { app.basemapOffline = true; UI.refreshPanels(); app.basemap.setStyle('none'); app.R.opts.opacity = 1; app.R.opts.grid = app.show.grid; if (app.R.points) app.R.points.visible = app.show.cities; app.R.dirty(); };
     app.R.onFrame = (R) => app.basemap.update(R);
     applyMapStyle();
     window.addEventListener('resize', () => app.R.resize());
@@ -93,7 +93,7 @@ export function setWorld(W) {
   app.activePlan = W.plans.length ? W.plans[W.plans.length - 1].id : null;
   refresh();
 }
-export function autosave() { try { return putSlot('autosave', serialize(app.W)); } catch (e) { console.warn(e); } }
+export function autosave() { try { app.lastAutosave = Date.now(); return putSlot('autosave', serialize(app.W)); } catch (e) { console.warn(e); } }
 
 // ---------------------------------------------------------------- themes & colours
 export const theme = () => app.catalog.find((t) => t.id === app.themeId) || app.catalog[0];
@@ -168,7 +168,8 @@ function refreshInner() {
   // ---- cell base colours
   if (t.layer === 'cells' && !poly) app.legend = colorize(t, land, N, t.value, base);
   else {
-    for (const i of land) { const c = TERRAIN_COLORS[W.terrain[i]], o = i * 4; base[o] = c[0] * 0.45 + 30; base[o + 1] = c[1] * 0.45 + 32; base[o + 2] = c[2] * 0.45 + 38; base[o + 3] = 255; }
+    const flat = app.mode === 'draw';
+    for (const i of land) { const c = TERRAIN_COLORS[W.terrain[i]], o = i * 4; if (flat) { base[o] = 46; base[o + 1] = 50; base[o + 2] = 58; } else { base[o] = c[0] * 0.45 + 30; base[o + 1] = c[1] * 0.45 + 32; base[o + 2] = c[2] * 0.45 + 38; } base[o + 3] = 255; }
     app.cellLegend = null;
   }
   app.cellColorOne = t.layer === 'cells' && !poly ? app.legend.colorOne : null;
@@ -187,7 +188,8 @@ function refreshInner() {
     app.R.setPolyColors(poly, arr);
     app.R.polys[poly].alpha = 0.93;
   }
-  app.R.opts.grid = app.show.grid && !app.smooth && !(app.basemap && app.basemap.online);
+  app.R.opts.grid = app.show.grid && !app.smooth && app.mode !== 'draw' && !(app.basemap && app.basemap.online);
+  if (app.R.points) app.R.points.visible = app.show.cities && app.mode !== 'draw' && !(app.basemap && app.basemap.hasLabels);
   app.R.thick.realBorders.visible = (app.show.borders && app.smooth !== 'owner') || (!!p && p.unit === 'provinces' && app.drawOpts.boundaries);
   app.R.lines.provLines.visible = !!p && (p.unit === 'cells' || p.unit === 'counties') && app.drawOpts.boundaries;
   app.R.lines.countyLines.visible = (!!p && p.unit === 'precincts' && app.drawOpts.boundaries) || (poly === 'precincts' && !p);
@@ -207,7 +209,7 @@ function composeCells(list) {
     let r = base[o], g = base[o + 1], b = base[o + 2];
     if (cellPlan) {
       const d = cellPlan.assign[i], O = app.drawOpts;
-      if (d >= 0 && !O.hideDistricts) { const c = cellPlan.colors[d]; if (O.showData) { r = r * 0.45 + c[0] * 0.55; g = g * 0.45 + c[1] * 0.55; b = b * 0.45 + c[2] * 0.55; } else { r = c[0]; g = c[1]; b = c[2]; } }
+      if (d >= 0 && !O.hideDistricts) { const c = districtCol(cellPlan, d); if (O.showData) { r = r * 0.45 + c[0] * 0.55; g = g * 0.45 + c[1] * 0.55; b = b * 0.45 + c[2] * 0.55; } else { r = c[0]; g = c[1]; b = c[2]; } }
       else if (eligible(W, cellPlan, i)) { if (d < 0 && O.highlightUnassigned && !O.showData) { r = r * 0.3 + 175; g = g * 0.3 + 160; b = b * 0.3 + 95; } else if (!O.showData) { r = r * 0.35 + 150; g = g * 0.35 + 152; b = b * 0.35 + 158; } }
       else { r *= 0.45; g *= 0.45; b *= 0.5; }
       grp[o + 2] = (d + 1) & 255; grp[o + 3] = (d + 1) >> 8;
@@ -358,12 +360,20 @@ function districtOutlines(p) {
 }
 let outlineTimer = 0;
 function scheduleOutlines(p) { clearTimeout(outlineTimer); outlineTimer = setTimeout(() => districtOutlines(p), 60); }
+// A district's display colour: its own colour, or blue↔red by its vote when "colour by vote" is on.
+const PARTISAN = [[178, 24, 43], [239, 138, 98], [244, 241, 238], [103, 169, 207], [33, 102, 172]];
+export function districtCol(p, d) {
+  if (!app.drawOpts.byVote || !app.stats || !app.stats.districts[d]) return p.colors[d];
+  const v = app.stats.districts[d].votes, t = v[0] + v[2]; if (!t) return [120, 124, 132];
+  const x = Math.max(0, Math.min(1, (v[0] / t - 0.2) / 0.6)) * 4, k = Math.min(3, Math.floor(x)), f = x - k;
+  return PARTISAN[k].map((c, j) => Math.round(c + (PARTISAN[k + 1][j] - c) * f));
+}
 function overlayPlanUnits(p, arr, list) {
   const W = app.W, O = app.drawOpts, base = app._unitBase && app._unitBase.length === arr.length ? app._unitBase : null;
   const one = (u) => {
     const o = u * 4, d = p.assign[u];
     const br = base ? base[o] : arr[o], bg = base ? base[o + 1] : arr[o + 1], bb = base ? base[o + 2] : arr[o + 2];
-    if (d >= 0 && !O.hideDistricts) { const c = p.colors[d]; if (O.showData) { arr[o] = br * 0.45 + c[0] * 0.55; arr[o + 1] = bg * 0.45 + c[1] * 0.55; arr[o + 2] = bb * 0.45 + c[2] * 0.55; } else { arr[o] = c[0]; arr[o + 1] = c[1]; arr[o + 2] = c[2]; } arr[o + 3] = 255; }
+    if (d >= 0 && !O.hideDistricts) { const c = districtCol(p, d); if (O.showData) { arr[o] = br * 0.45 + c[0] * 0.55; arr[o + 1] = bg * 0.45 + c[1] * 0.55; arr[o + 2] = bb * 0.45 + c[2] * 0.55; } else { arr[o] = c[0]; arr[o + 1] = c[1]; arr[o + 2] = c[2]; } arr[o + 3] = 255; }
     else if (eligible(W, p, u)) {
       if (O.showData || (d >= 0 && O.hideDistricts)) { arr[o] = br; arr[o + 1] = bg; arr[o + 2] = bb; arr[o + 3] = 235; }
       else if (O.highlightUnassigned) { arr[o] = br * 0.3 + 175; arr[o + 1] = bg * 0.3 + 160; arr[o + 2] = bb * 0.3 + 95; arr[o + 3] = 235; }
@@ -441,7 +451,7 @@ function drawLabels(ctx, R) {
     }
   }
   // cities
-  if (app.show.cities && scale > 900 && !(app.basemap && app.basemap.hasLabels)) {
+  if (app.show.cities && app.mode !== 'draw' && scale > 900 && !(app.basemap && app.basemap.hasLabels)) {
     const lim = scale > 20000 ? 7000 : scale > 6000 ? 1500 : scale > 2500 ? 400 : 90;
     const C = app.D.units.cities;
     for (let k = 0; k < Math.min(lim, C.length); k++) {
@@ -555,7 +565,9 @@ function strokeMove(px, py) {
   const unitMode = stroke.tgt === 'plan' && p.unit !== 'cells';
   if (unitMode) {
     const list = [];
-    for (const [x, y] of pts) { const [wx, wy] = app.R.screenToWorld(x, y); const u = pickUnit(p.unit, wx, wy); if (u >= 0) list.push(u); }
+    const rad = (app.brush - 1) * 9, offs = [[0, 0]];
+    if (rad > 0) for (let r = rad / 2; r <= rad; r += rad / 2) for (let a = 0; a < 12; a++) offs.push([Math.cos(a * Math.PI / 6) * r, Math.sin(a * Math.PI / 6) * r]);
+    for (const [x, y] of pts) for (const [ox, oy] of offs) { const [wx, wy] = app.R.screenToWorld(x + ox, y + oy); const u = pickUnit(p.unit, wx, wy); if (u >= 0) list.push(u); }
     if (!list.length) return;
     const all = app.drawOpts.parent && app.tool !== 'erase' ? [...new Set(list.flatMap((u) => parentUnits(W, p, u)))] : list;
     paintUnits(W, p, all, app.tool === 'erase' ? -1 : app.district, stroke.changes, app.drawOpts.noOverwrite);
@@ -687,6 +699,7 @@ export function computePlanStats() {
     app.planCentroids = Array.from({ length: p.n }, (_, d) => sc[d] ? [sx[d] / sc[d], sy[d] / sc[d], d] : null);
   }
   UI.refreshStats && UI.refreshStats();
+  if (app.drawOpts.byVote && app.mode === 'draw') refresh();
   app.R.dirty();
 }
 

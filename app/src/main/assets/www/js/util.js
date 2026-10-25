@@ -55,6 +55,7 @@ export function districtColor(k) { const h = (k * 137.508 + 12) % 360; return hs
 // ---- formatting ----
 export function fmt(n, d = 1) {
   if (n == null || !isFinite(n)) return '—';
+  if (n === 0) return '0';
   const a = Math.abs(n);
   if (a >= 1e12) return (n / 1e12).toFixed(d) + 'T'; if (a >= 1e9) return (n / 1e9).toFixed(d) + 'B';
   if (a >= 1e6) return (n / 1e6).toFixed(d) + 'M'; if (a >= 1e4) return (n / 1e3).toFixed(0) + 'k';
