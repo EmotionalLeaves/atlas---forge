@@ -31,16 +31,31 @@ KEYQ=""; [ -n "${CENSUS_API_KEY:-}" ] && KEYQ="&key=$CENSUS_API_KEY"
 okjson() { [ -s "$1" ] && head -c 3 "$1" | grep -q '^\[\["'; }
 # show what the API says once, so a failure is diagnosable from the log
 code=$(curl -sS -A "$UA" --max-time 60 -o "$US/probe.txt" -w '%{http_code}' "$API?get=P1_001N&for=state:01$KEYQ" 2>&1); echo "API probe: HTTP $code: $(head -c 300 "$US/probe.txt" 2>/dev/null)"
-for f in $FIPS; do
-  t="$US/pl/tract_$f.json"; b="$US/pl/bg_$f.json"
-  okjson "$t" || { get "$API?get=$VARS&for=tract:*&in=state:$f$KEYQ" "$t"; okjson "$t" || echo "FAIL pl tract $f"; }
-  if ! okjson "$b"; then
-    for q in "for=block%20group:*&in=state:$f&in=county:*&in=tract:*" "for=block%20group:*&in=state:$f%20county:*%20tract:*" "for=block%20group:*&in=state:$f%20county:*"; do
-      get "$API?get=$VARS&$q$KEYQ" "$b" && okjson "$b" && break
-    done
-    okjson "$b" || echo "FAIL pl bg $f"
-  fi
-  sleep 0.3
+if [ "${code:0:3}" = "200" ]; then
+  for f in $FIPS; do
+    t="$US/pl/tract_$f.json"; b="$US/pl/bg_$f.json"
+    okjson "$t" || { get "$API?get=$VARS&for=tract:*&in=state:$f$KEYQ" "$t"; okjson "$t" || echo "FAIL pl tract $f"; }
+    if ! okjson "$b"; then
+      for q in "for=block%20group:*&in=state:$f&in=county:*&in=tract:*" "for=block%20group:*&in=state:$f%20county:*%20tract:*" "for=block%20group:*&in=state:$f%20county:*"; do
+        get "$API?get=$VARS&$q$KEYQ" "$b" && okjson "$b" && break
+      done
+      okjson "$b" || echo "FAIL pl bg $f"
+    fi
+    sleep 0.3
+  done
+fi
+# no API access: read the published PL 94-171 summary files, one state at a time
+PLURL=https://www2.census.gov/programs-surveys/decennial/2020/data/01-Redistricting_File--PL_94-171
+STATES="01:Alabama:al 02:Alaska:ak 04:Arizona:az 05:Arkansas:ar 06:California:ca 08:Colorado:co 09:Connecticut:ct 10:Delaware:de 11:District_of_Columbia:dc 12:Florida:fl 13:Georgia:ga 15:Hawaii:hi 16:Idaho:id 17:Illinois:il 18:Indiana:in 19:Iowa:ia 20:Kansas:ks 21:Kentucky:ky 22:Louisiana:la 23:Maine:me 24:Maryland:md 25:Massachusetts:ma 26:Michigan:mi 27:Minnesota:mn 28:Mississippi:ms 29:Missouri:mo 30:Montana:mt 31:Nebraska:ne 32:Nevada:nv 33:New_Hampshire:nh 34:New_Jersey:nj 35:New_Mexico:nm 36:New_York:ny 37:North_Carolina:nc 38:North_Dakota:nd 39:Ohio:oh 40:Oklahoma:ok 41:Oregon:or 42:Pennsylvania:pa 44:Rhode_Island:ri 45:South_Carolina:sc 46:South_Dakota:sd 47:Tennessee:tn 48:Texas:tx 49:Utah:ut 50:Vermont:vt 51:Virginia:va 53:Washington:wa 54:West_Virginia:wv 55:Wisconsin:wi 56:Wyoming:wy 72:Puerto_Rico:pr"
+for e in $STATES; do
+  IFS=: read -r f name ab <<< "$e"
+  okjson "$US/pl/tract_$f.json" && okjson "$US/pl/bg_$f.json" && continue
+  z="$US/zip/pl_$ab.zip"; d="$US/plx_$ab"
+  if get "$PLURL/$name/${ab}2020.pl.zip" "$z"; then
+    rm -rf "$d"; mkdir -p "$d"
+    unzip -oq "$z" '*geo2020.pl' '*000012020.pl' '*000022020.pl' -d "$d" && node --max-old-space-size=6000 "$ROOT/tools/pl-from-files.mjs" "$d" "$f" "$US/pl" || echo "FAIL pl files $ab"
+    rm -rf "$d" "$z"
+  else echo "FAIL download $PLURL/$name/${ab}2020.pl.zip"; fi
 done
 echo "pl files ok: $(for x in "$US"/pl/*.json; do okjson "$x" && echo .; done | wc -l)"
 
