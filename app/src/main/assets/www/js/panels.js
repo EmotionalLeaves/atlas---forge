@@ -35,6 +35,8 @@ const ICON = {
   dropper: '<svg viewBox="0 0 24 24"><path d="M14 4l6 6-2 2-6-6zM12 8l-7.5 7.5L4 20l4.5-.5L16 12"/></svg>',
   undo: '<svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></svg>',
   redo: '<svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5M20 9H10a6 6 0 0 0 0 12h3"/></svg>',
+  expand: '<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+  shrink: '<svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>',
   layers: '<svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>',
   play: '<svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z" fill="currentColor"/></svg>',
   pause: '<svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" stroke-width="3.2"/></svg>',
@@ -55,15 +57,16 @@ export function init() {
   const fl = $('#floating');
   fl.append(h('button', { class: 'fab', 'aria-label': 'Search places', onclick: openSearch, html: ICON.search }),
     h('button', { class: 'fab', 'aria-label': 'Whole world', onclick: worldView, html: ICON.home }),
-    h('button', { class: 'fab', id: 'layersFab', 'aria-label': 'Map layers', onclick: openLayers, html: ICON.layers }));
+    h('button', { class: 'fab', id: 'layersFab', 'aria-label': 'Map layers', onclick: openLayers, html: ICON.layers }),
+    h('button', { class: 'fab', id: 'fsBtn', 'aria-label': 'Full screen', onclick: () => setFull(!app.full) }));
   // keep track of how much of the map the sheet covers so the camera frames the visible part
   const sheet = $('#sheet');
   const updPad = () => {
-    const r = sheet.getBoundingClientRect(), wide = window.innerWidth >= 760;
-    app.R.pad = wide ? { l: r.right, b: 0 } : { l: 0, b: Math.max(0, window.innerHeight - r.top) };
+    const r = sheet.getBoundingClientRect(), wide = window.innerWidth >= 760 && !app.full;
+    app.R.pad = app.full ? { l: 0, b: 0 } : wide ? { l: r.right, b: 0 } : { l: 0, b: Math.max(0, window.innerHeight - r.top) };
     $('#attr').style.bottom = (wide ? 6 : app.R.pad.b + 4) + 'px';
     const ml = $('#mapLegend'), dk = $('#dock'), dockH = dk && !dk.hidden ? dk.getBoundingClientRect().height + 10 : 0;
-    if (dk) { dk.style.bottom = (wide ? 14 : app.R.pad.b + 10) + 'px'; dk.style.left = (wide ? r.right + 14 : 10) + 'px'; dk.classList.toggle('tucked', !wide && app.R.pad.b > window.innerHeight * 0.66); }
+    if (dk) { dk.style.bottom = (wide || app.full ? 14 : app.R.pad.b + 10) + 'px'; dk.style.left = (wide ? r.right + 14 : 10) + 'px'; dk.classList.toggle('tucked', !wide && app.R.pad.b > window.innerHeight * 0.66); }
     if (ml) { ml.style.bottom = (wide ? 14 + dockH : app.R.pad.b + 10 + dockH) + 'px'; ml.style.left = (wide ? r.right + 12 : 10) + 'px'; }
     app.updPad = updPad;
   };
@@ -75,10 +78,18 @@ export function init() {
     if (!$('#modal').classList.contains('hidden')) { closeModal(); return true; }
     if (infoOpen) { hideInfo(); return true; }
     if (app.running) { setRunning(false); return true; }
-    if (app.mode !== 'explore') { setMode('explore'); return true; }
+    if (app.full) { setFull(false); return true; }
+    if (app.mode !== 'edit') { setMode('edit'); return true; }
     autosave(); return false;
   };
-  setMode('explore');
+  setMode('edit'); setFull(true);
+}
+// Full screen: only the map, the tool bar and the hint; everything else is one tap away.
+export function setFull(on) {
+  app.full = on; document.body.classList.toggle('full', on);
+  const b = $('#fsBtn'); if (b) { b.innerHTML = on ? ICON.shrink : ICON.expand; b.setAttribute('aria-label', on ? 'Show panels' : 'Full screen'); }
+  if (window.AndroidBridge && AndroidBridge.setImmersive) try { AndroidBridge.setImmersive(on); } catch {}
+  if (app.updPad) app.updPad(); requestAnimationFrame(() => app.updPad && app.updPad()); app.R && app.R.dirty();
 }
 
 export function worldView() {
@@ -107,10 +118,17 @@ function setupSheet() {
   window.addEventListener('resize', () => setSheet(app.sheet || 'peek'));
   setSheet('peek');
 }
+// Edit opens ready to paint: land goes to the nation in the middle of the map (tap the circle to change it).
+function readyEdit() {
+  const W = app.W; if (app.paintChosen) return;
+  const i = cellAtScreen(...app.R.visibleCenter); let id = i >= 0 ? W.owner[i] : 0;
+  if (!id || !W.nations[id] || !W.nations[id].alive) id = W.nations.filter((n) => n && n.alive).sort((a, b) => b.cells - a.cells)[0].id;
+  app.paintNation = id; app.paintChosen = true; app.editTool = 'borders'; app.tool = 'brush';
+}
 export function setMode(m) {
   if (m === 'draw' && app.mode !== 'draw') { app.tool = plan() ? 'brush' : 'pan'; }
   else if (m !== 'draw' && m !== 'edit') app.tool = 'pan';
-  if (m === 'edit' && app.mode !== 'edit') app.tool = 'pan';
+  if (m === 'edit' && app.mode !== 'edit') { app.tool = 'pan'; readyEdit(); if (app.editTool === 'borders' || app.editTool === 'data') app.tool = 'brush'; }
   if (m !== 'sim' && app.histOwner) viewHistory(null);
   if (m !== app.mode) { infoOpen = false; app.sel = null; }
   app.mode = m;
@@ -1196,7 +1214,7 @@ function openMenu() {
       btn('⬇ Export file', async () => { toast('Packing…'); const b = await exportBlob(W); saveFile((W.name || 'world').replace(/\W+/g, '_') + '.atlas', b); }),
       btn('⬆ Import file', () => fileIn.click()), fileIn,
       btn('🌍 New world', () => openNewWorld()),
-      btn('Show the start screen', () => { try { localStorage.removeItem('af_welcome'); } catch {} closeModal(); setMode('explore'); setSheet('half'); refreshPanels(); })),
+      btn('Show the start screen', () => { try { localStorage.removeItem('af_welcome'); } catch {} closeModal(); setFull(false); setMode('explore'); setSheet('half'); refreshPanels(); })),
     h('div', { class: 'sec-t' }, 'Saved worlds'), slots,
     h('details', { class: 'sec' }, h('summary', null, 'About & data'), h('p', { class: 'muted small' }, `Atlas Forge — draw districts and run history on a ${W.Wd}×${W.Hd} grid of the real Earth. Borders, provinces, cities, terrain: Natural Earth (public domain). US counties and populations: US Census Bureau. Country population/GDP: Natural Earth (2019–2021 estimates). Cell populations are modelled from those figures.`))));
 }

@@ -196,6 +196,23 @@ public class MainActivity extends Activity {
     }
     private static void deleteTree(File f) { File[] k = f.listFiles(); if (k != null) for (File x : k) deleteTree(x); f.delete(); }
 
+    /** Hide (or show) the status and navigation bars; a swipe from the edge brings them back briefly. */
+    @SuppressWarnings("deprecation")
+    private void immersive(boolean on) {
+        android.view.Window w = getWindow();
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            w.setDecorFitsSystemWindows(!on);
+            android.view.WindowInsetsController c = w.getInsetsController();
+            if (c == null) return;
+            if (on) { c.hide(android.view.WindowInsets.Type.systemBars()); c.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE); }
+            else c.show(android.view.WindowInsets.Type.systemBars());
+        } else {
+            w.getDecorView().setSystemUiVisibility(on ? (android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | android.view.View.SYSTEM_UI_FLAG_FULLSCREEN | android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE | android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION) : android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        }
+    }
+    private boolean wantImmersive = false;
+
     private static String mimeOf(String path) {
         if (path.endsWith(".html")) return "text/html";
         if (path.endsWith(".js") || path.endsWith(".mjs")) return "text/javascript";
@@ -229,6 +246,12 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && wantImmersive) immersive(true); // re-hide the bars after dialogs and app switches
+    }
+
+    @Override
     protected void onPause() {
         if (web != null) web.evaluateJavascript("window.app && window.app.W && import('./js/app.js').then(m => m.autosave())", null);
         super.onPause();
@@ -252,6 +275,9 @@ public class MainActivity extends Activity {
                 try { startActivity(Intent.createChooser(i, "Share plan")); } catch (ActivityNotFoundException ignored) { }
             });
         }
+
+        @JavascriptInterface
+        public void setImmersive(boolean on) { wantImmersive = on; runOnUiThread(() -> immersive(on)); }
 
         @JavascriptInterface
         public String tileCacheInfo() {

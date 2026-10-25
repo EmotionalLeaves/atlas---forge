@@ -370,3 +370,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .ucards button.on b { color: var(--accent2); }
 @media (min-width: 760px) { #hint { left: calc(50% + 230px); max-width: calc(100% - 600px); } }
 .linkbtn.back { font-size: 15px; text-decoration: none; margin: 8px 0 2px; display: inline-block; }
+/* full screen: only the map, the tool bar and the hint */
+body.full #top, body.full #tabs, body.full #sheet, body.full #floating .fab:not(#fsBtn), body.full #attr { display: none; }
+body.full #floating { top: calc(10px + env(safe-area-inset-top)); }
+body.full #hint { top: calc(12px + env(safe-area-inset-top)); max-width: calc(100% - 84px); left: calc(50% - 24px); }
+body.full #dock { bottom: calc(14px + env(safe-area-inset-bottom)) !important; }
+#fsBtn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
