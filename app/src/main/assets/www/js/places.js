@@ -2,6 +2,8 @@
 // Districtr's state view: everything outside is dimmed, the camera frames it, and painting stays inside.
 import { h, fmt } from './util.js';
 import { mercX, mercY } from './gl.js';
+import { cellAt } from './world.js';
+import { select } from './app.js';
 
 export const FOCUS = { cur: null };
 let app = null, UI = null;
@@ -106,6 +108,22 @@ export function cellInFocus(i) {
 export function pointInFocus(wx, wy) { const f = FOCUS.cur; if (!f || !f.bbox) return true; const b = f.bbox, m = Math.max(b[2] - b[0], b[3] - b[1]) * 0.05; wx = ((wx % 1) + 1) % 1; return wx >= b[0] - m && wx <= b[2] + m && wy >= b[1] - m && wy <= b[3] + m; }
 
 // ---- the picker ----
+function findAll(q, list, browse) {
+  const U = app.D.units; q = q.trim().toLowerCase();
+  if (q.length < 2) { browse.hidden = false; list.querySelectorAll('.titem').forEach((e) => { e.style.display = e.dataset.res ? 'none' : ''; }); list.querySelectorAll('[data-res]').forEach((e) => e.remove()); return; }
+  browse.hidden = true; list.querySelectorAll('.titem:not([data-res])').forEach((e) => { e.style.display = 'none'; }); list.querySelectorAll('[data-res]').forEach((e) => e.remove());
+  const sc = (n) => { n = String(n || '').toLowerCase(); return n === q ? 0 : n.startsWith(q) ? 1 : n.includes(' ' + q) ? 2 : n.includes(q) ? 3 : -1; };
+  const res = [], add = (kind, name, sub, score, w, go) => { if (score >= 0) res.push({ kind, name, sub, score, w, go }); };
+  const K = { CTRY: 0, STATE: 1, CNTY: 2, CITY: 3 };
+  U.countries.forEach((c, k) => add('CTRY', c.name, c.continent || 'Country', sc(c.name), c.pop, () => focusCountry(k + 1)));
+  U.provinces.forEach((p, k) => add('STATE', p.n, `${p.t || 'Region'} · ${U.countries[p.c - 1] ? U.countries[p.c - 1].name : ''}`, sc(p.n), p.pop || 0, () => focusProvince(k)));
+  U.counties.forEach((c, k) => add('CNTY', `${c.n}, ${c.s}`, 'US county', sc(c.n), c.pop, () => focusCounty(k)));
+  U.cities.forEach((c) => add('CITY', c.name, `City · ${U.countries[c.country - 1] ? U.countries[c.country - 1].name : ''}`, sc(c.name), c.pop, () => { app.R.flyTo(c.lng, c.lat, 9000); const i = cellAt(app.W, c.lng, c.lat); select({ cell: i, nation: app.W.owner[i] }); UI.showInfo(); }));
+  res.sort((a, b) => a.score - b.score || K[a.kind] - K[b.kind] || b.w - a.w);
+  const cls = { CTRY: 'country', STATE: 'province', CNTY: 'county', CITY: 'city' };
+  for (const r of res.slice(0, 30)) list.append(h('button', { class: 'titem', 'data-res': '1', onclick: () => { UI.closeModal(); r.go(); } }, h('span', { class: 'kind k-' + cls[r.kind] }, r.kind), h('span', null, r.name, h('small', { class: 'block' }, r.sub))));
+  if (!res.length) list.append(h('p', { class: 'muted small', 'data-res': '1' }, 'Nothing by that name.'));
+}
 export function openPlacePicker() {
   const U = app.D.units, body = h('div', { class: 'places' });
   const path = []; // [{kind, label, id}]
@@ -121,8 +139,12 @@ export function openPlacePicker() {
     const rowBtn = (title, sub, onclick) => h('button', { class: 'titem', onclick }, h('span', null, title, sub ? h('small', { class: 'block' }, sub) : null), h('span', { class: 'chev' }, '›'));
     const search = h('input', { class: 'search', placeholder: 'Search…', oninput: () => { const q = search.value.toLowerCase(); list.querySelectorAll('.titem').forEach((e) => { e.style.display = e.textContent.toLowerCase().includes(q) ? '' : 'none'; }); } });
     if (!top) {
-      body.append(h('p', { class: 'muted small' }, 'Pick a place to work on. Everything else is dimmed and painting stays inside it.'));
+      // one search for everything: countries, states and provinces, US counties and cities
+      const all = h('input', { class: 'search', placeholder: 'Search any country, state, county or city', oninput: () => findAll(all.value, list, browse) });
+      const browse = h('div', null, h('p', { class: 'muted small' }, 'Or browse. The place you pick is shown on its own; everything else is dimmed.'));
+      body.append(all, browse);
       for (const [ct, cs] of continentsOf(U)) list.append(rowBtn(ct, `${cs.length} countries`, () => { path.push({ kind: 'continent', label: ct, id: ct }); draw(); }));
+      if (window.innerWidth >= 760) setTimeout(() => all.focus(), 50);
     } else if (top.kind === 'continent') {
       body.append(show(top.label, () => focusContinent(top.id)), search);
       const cs = continentsOf(U).find((x) => x[0] === top.id)[1].slice().sort((a, b) => U.countries[a - 1].name.localeCompare(U.countries[b - 1].name));
@@ -138,8 +160,8 @@ export function openPlacePicker() {
     }
     body.append(list);
   };
-  // open where the current focus is
-  const f = FOCUS.cur;
+  // always open at the top, where the search finds anything (the current place is one tap from there)
+  const f = null;
   if (f) {
     const ci = f.country, c = ci && U.countries[ci - 1];
     if (c) { path.push({ kind: 'continent', label: c.continent, id: c.continent }); if (f.kind !== 'country' && provsOf(U, ci).length > 1) path.push({ kind: 'country', label: c.name, id: ci }); }
@@ -147,5 +169,5 @@ export function openPlacePicker() {
     if (f.kind === 'country' || f.kind === 'continent') path.length = f.kind === 'continent' ? 0 : 1;
   }
   draw();
-  UI.openModal('Choose a place', body);
+  UI.openModal('Find a place', body);
 }

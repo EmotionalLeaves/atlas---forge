@@ -1,0 +1,41 @@
+{
+  "name": "atlas-forge",
+  "productName": "Atlas Forge",
+  "version": "1.0.0",
+  "description": "Draw districts and edit the world map, like Districtr.",
+  "author": "EmotionalLeaves",
+  "license": "MIT",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "com.emotionalleaves.atlasforge",
+    "productName": "Atlas Forge",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "package.json"],
+    "extraResources": [{ "from": "www", "to": "www" }],
+    "asar": true,
+    "compression": "normal",
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }, { "target": "zip", "arch": ["x64"] }],
+      "icon": "icon.png",
+      "artifactName": "AtlasForge-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Atlas Forge",
+      "artifactName": "AtlasForge-Setup-${version}.${ext}"
+    },
+    "zip": { "artifactName": "AtlasForge-Windows-${version}.${ext}" }
+  }
+}

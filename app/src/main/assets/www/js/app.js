@@ -436,7 +436,8 @@ function districtOutlines(p) {
   for (let k = 0; k < g.luid.length; k += 2) {
     const d = A[g.luid[k]]; if (d < 0) continue;
     const nb = g.lnb[k], e = (nb === 65535 || nb === 0xffffffff) ? -2 : A[nb];
-    if (e !== d) out.push(g.lpos[k * 2], g.lpos[k * 2 + 1], g.lpos[k * 2 + 2], g.lpos[k * 2 + 3]);
+    // only where two districts meet: rings around unpainted areas read as white blobs (and the place's own edge has its outline)
+    if (e >= 0 && e !== d) out.push(g.lpos[k * 2], g.lpos[k * 2 + 1], g.lpos[k * 2 + 2], g.lpos[k * 2 + 3]);
   }
   app.R.setOverlayLines('districts', new Float32Array(out));
 }
@@ -762,6 +763,8 @@ export function undoRedo(isRedo) {
 function onTap(px, py) {
   const W = app.W, [wx, wy] = app.R.screenToWorld(px, py), i = cellAtScreen(px, py);
   const p = plan();
+  // setting up a plan: tapping the map picks the place, like clicking a state in Districtr
+  if (app.mode === 'draw' && (!p || app._newPlan) && app._formPick && i >= 0 && W.D.cells.country[i]) { app._formPick(i); return; }
   if (app.mode === 'draw' && p) {
     const u = p.unit === 'cells' ? i : pickUnit(p.unit, wx, wy);
     if (u < 0) return;
@@ -832,6 +835,8 @@ function setupInput(el) {
     el.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.offsetX, e.offsetY]);
     if (ptrs.size === 1) {
       start = { x: e.offsetX, y: e.offsetY, t: performance.now() }; mode = 'maybe';
+      // mouse: right or middle button (or holding Space) always moves the map, so painting never gets in the way
+      if (e.pointerType === 'mouse' && (e.button === 1 || e.button === 2 || keys.space)) { mode = 'pan'; return; }
       if (paintTarget()) { if (strokeStart(e.offsetX, e.offsetY)) mode = 'paint'; }
     } else if (ptrs.size === 2) { if (mode === 'paint') strokeCancel(); mode = 'pinch'; lastPinch = null; }
   });
@@ -860,6 +865,37 @@ function setupInput(el) {
   };
   el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
   el.addEventListener('wheel', (e) => { e.preventDefault(); app.R.zoomAt(e.offsetX, e.offsetY, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+  setupKeys();
+}
+// Keyboard (Windows / desktop): Districtr-style shortcuts.
+const keys = { space: false };
+function setupKeys() {
+  let digits = '', digitT = 0;
+  const typing = (e) => e.target && e.target.matches && e.target.matches('input, textarea, select');
+  const tool = (t) => { if (!(app.mode === 'draw' && plan()) && !(app.mode === 'edit' && ['borders', 'data'].includes(app.editTool))) return; if (t === 'fill' && app.mode !== 'draw') return; app.tool = t; UI.refreshPanels(); };
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && !typing(e)) { keys.space = true; if (e.target === document.body) e.preventDefault(); }
+    if (typing(e)) return;
+    const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
+    if (mod && k === 'z') { e.preventDefault(); undoRedo(e.shiftKey); return; }
+    if (mod && k === 'y') { e.preventDefault(); undoRedo(true); return; }
+    if (mod) return;
+    if (k === 'escape') { if (!document.getElementById('modal').classList.contains('hidden')) UI.closeModal(); else if (app.tool === 'pick') { app.tool = 'brush'; UI.refreshPanels(); } return; }
+    if (k === 'p' || k === 'b') return tool('brush');
+    if (k === 'm' || k === 'h') return tool('pan');
+    if (k === 'e') return tool('erase');
+    if (k === 'f') return tool('fill');
+    if (k === 'i') return tool('pick');
+    if (k === '[' || k === ']') { app.brush = Math.max(1, Math.min(16, app.brush + (k === ']' ? 1 : -1))); UI.refreshPanels(); return; }
+    if (/^[0-9]$/.test(k) && app.mode === 'draw' && plan()) { // type a district's number to paint with it
+      const p = plan(); clearTimeout(digitT); digits += k; const n = +digits;
+      if (n >= 1 && n <= p.n) { app.district = n - 1; if (app.tool === 'pan' || app.tool === 'pick') app.tool = 'brush'; UI.refreshPanels(); }
+      digitT = setTimeout(() => { digits = ''; }, 700); if (digits.length >= String(p.n).length) digits = '';
+    }
+  });
+  document.addEventListener('keyup', (e) => { if (e.code === 'Space') keys.space = false; });
+  window.addEventListener('blur', () => { keys.space = false; });
 }
 
 // ---------------------------------------------------------------- simulation loop

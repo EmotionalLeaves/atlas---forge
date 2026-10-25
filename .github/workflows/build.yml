@@ -87,12 +87,23 @@ jobs:
           name: AtlasForge-v1.0.${{ github.run_number }}
           path: AtlasForge-*.apk
 
+      # the same web app and map data, handed to the Windows build below
+      - name: Hand the app to the Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: www
+          path: app/src/main/assets/www
+          retention-days: 1
+          compression-level: 1
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
           name: Atlas Forge v1.0.${{ github.run_number }}
-          body: Download the APK below and open it on your phone to install (allow installs from your browser/files app if asked). It installs over earlier versions and keeps your saved worlds.
+          body: |
+            **Android:** download the APK below and open it on your phone to install (allow installs from your browser/files app if asked). It installs over earlier versions and keeps your saved maps.
+            **Windows:** download AtlasForge-Setup (installer) or AtlasForge-Windows (zip, no install) below; the Windows files appear a few minutes after the APK.
           files: AtlasForge-*.apk
           make_latest: true
 
@@ -107,3 +118,39 @@ jobs:
           git config user.name "ci" && git config user.email "ci@users.noreply.github.com"
           git add . && git commit -qm "build log ${{ github.run_number }}"
           git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" ci-log
+
+  windows:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Get the app and map data
+        uses: actions/download-artifact@v4
+        with:
+          name: www
+          path: desktop/www
+
+      - name: Build the Windows app
+        working-directory: desktop
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          set -o pipefail
+          npm version 1.0.${{ github.run_number }} --no-git-tag-version --allow-same-version
+          npm install --no-audit --no-fund
+          npx electron-builder --win --x64 --publish never 2>&1 | tee build-win.log
+          ls -la dist
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          files: |
+            desktop/dist/AtlasForge-Setup-*.exe
+            desktop/dist/AtlasForge-Windows-*.zip

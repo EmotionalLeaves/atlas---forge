@@ -379,7 +379,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 @media (min-width: 760px) { #hint { left: calc(50% + 230px); max-width: calc(100% - 600px); } }
 .linkbtn.back { font-size: 15px; text-decoration: none; margin: 8px 0 2px; display: inline-block; }
 /* full screen: only the map, the tool bar and the hint */
-body.full #sheet, body.full #floating .fab:not(#fsBtn):not(#layersFab), body.full #attr { display: none; }
+body.full:not(.has-head) #sheet, body.full #sheetBody, body.full #sheet .grab, body.full #floating .fab:not(#fsBtn):not(#layersFab), body.full #attr { display: none; }
+body.full #sheet { padding-top: 6px; }
+@media (min-width: 760px) { body.full #sheet { bottom: auto !important; } }
 #fsBtn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 /* toggles inside forms keep their switch layout */
 .form label.tog, label.tog { display: inline-flex; align-items: center; gap: 8px; margin: 6px 0; color: var(--text); }
@@ -464,3 +466,45 @@ button { touch-action: manipulation; }
 .pickbtn { margin: 0 0 10px; }
 [hidden] { display: none !important; }
 .themechip { max-width: 46vw; } @media (min-width: 760px) { .themechip { max-width: 420px; } }
+
+/* ---------- the panel toolbar (Districtr 2 style) ---------- */
+#sheetHead { flex: none; padding: 0 10px 8px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--line); }
+#sheetHead[hidden] { display: none; }
+.tbar { display: flex; align-items: stretch; gap: 2px; }
+.tbar .tool { flex: 1 1 0; min-width: 0; min-height: 50px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border-radius: var(--r-m); color: var(--text); padding: 4px 0; }
+.tbar .tool small { font-size: 11px; color: var(--muted); font-weight: 500; }
+.tbar .tool.on { background: rgba(217,164,65,.16); box-shadow: inset 0 0 0 1px var(--accent); }
+.tbar .tool.on small { color: var(--accent2); }
+.tbar .tool:disabled { opacity: .3; }
+.tbar .tool.ur { flex: 0 0 52px; }
+.tbar .ti svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; display: block; }
+.tbar .sep { width: 1px; background: var(--line2); margin: 8px 3px; flex: none; }
+.srow { display: flex; align-items: center; gap: 10px; min-height: 36px; font-size: 14px; }
+.srow input[type=range] { flex: 1; min-width: 60px; padding: 0; height: 34px; background: none; border: 0; accent-color: var(--accent); }
+.srow > b { font-variant-numeric: tabular-nums; min-width: 18px; }
+.srow.pickon { color: var(--accent2); }
+.srow.pickon .ic svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; }
+.srow.pickon .dxc { margin-left: auto; }
+label.mini { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); white-space: nowrap; margin: 0; }
+label.mini input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); padding: 0; }
+.pickrow.slim { min-height: 46px; margin: 0; padding: 6px 10px; }
+.pickrow.slim .sw { width: 22px; height: 22px; }
+.pickrow.slim b { font-size: 15px; }
+/* the district colour bar */
+.dchips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 1px 2px; scroll-behavior: smooth; }
+.dchips::-webkit-scrollbar { display: none; }
+.dc { flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; position: relative;
+  background: radial-gradient(closest-side, var(--panel) 72%, transparent 75% 100%), conic-gradient(var(--c) var(--f), rgba(236,231,218,.14) 0); }
+.dc::before { content: ''; position: absolute; inset: 6px; border-radius: 50%; background: var(--c); }
+.dc b { position: relative; color: #0d1720; font-size: 13px; font-weight: 700; }
+.dc.on { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px #fff; }
+.dc.bad::after { content: ''; position: absolute; right: 0; top: 0; width: 9px; height: 9px; border-radius: 50%; background: var(--danger); border: 2px solid var(--panel); }
+.dc.locked::before { opacity: .55; }
+.dc.pick { background: var(--panel3); color: var(--accent2); }
+.dc.pick::before { display: none; }
+.dc.pick svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; position: relative; }
+.dc.pick.on { background: rgba(217,164,65,.25); }
+.dchoose .titem .radio { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line2); flex: none; margin-left: auto; }
+.dchoose .titem.on .radio { border-color: var(--accent); box-shadow: inset 0 0 0 4px var(--panel), inset 0 0 0 10px var(--accent); }
+.dchoose .titem.on { color: var(--text); }
+.btn.primary:disabled { opacity: .45; }
