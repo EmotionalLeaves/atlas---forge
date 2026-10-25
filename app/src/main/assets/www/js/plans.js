@@ -366,3 +366,20 @@ export function applyRealPlan(W, p, k) {
   setDistrictCount(p, R.n); p.assign.set(R.assign); p.locked = [];
   return true;
 }
+
+// Build the graph a ReCom worker needs for plan p (only units inside the plan's area).
+export function recomInput(W, p) {
+  const pops = unitPops(W, p), elig = [], local = new Int32Array(p.assign.length).fill(-1);
+  for (let u = 0; u < p.assign.length; u++) if ((p.unit !== 'cells' || W.D.cells.country[u]) && eligible(W, p, u)) { local[u] = elig.length; elig.push(u); }
+  const n = elig.length, off = new Int32Array(n + 1), nbs = [], nb = [];
+  for (let i = 0; i < n; i++) { neighborsOf(W, p, elig[i], nb); for (let k = 0; k < nb.length; k += 2) { const j = local[nb[k]]; if (j >= 0 && j !== i) nbs.push(j); } off[i + 1] = nbs.length; }
+  const pop = Float64Array.from(elig, (u) => pops[u]);
+  const E = precinctVotes(W, p), leans = E ? null : unitLeans(W, p);
+  const dem = new Float64Array(n), rep = new Float64Array(n);
+  for (let i = 0; i < n; i++) { const u = elig[i]; if (E) { dem[i] = E.d[u]; rep[i] = E.r[u]; } else { const l = leans[u], w = pop[i]; dem[i] = w * Math.max(0, Math.min(1, 0.5 - l)); rep[i] = w * Math.max(0, Math.min(1, 0.5 + l)); } }
+  let parent = null;
+  if (p.unit === 'precincts') { const P = W.D.packs[p.pack]; parent = Int32Array.from(elig, (u) => P.county[u]); }
+  else if (p.unit === 'counties') { const m = new Map(); parent = Int32Array.from(elig, (u) => { const s = W.D.units.counties[u].s; if (!m.has(s)) m.set(s, m.size); return m.get(s); }); }
+  else if (p.unit === 'cells') parent = Int32Array.from(elig, (u) => W.D.cells.admin1[u]);
+  return { elig, n, off, nb: Int32Array.from(nbs), pop, dem, rep, parent };
+}

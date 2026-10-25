@@ -6,7 +6,7 @@ import { app, setTheme, refresh, theme, plan, select, undoRedo, scheduleStats, c
 import { packList } from './precincts.js';
 import { rel, setRel, computeAggregates, computeAdjacency, newNation, cellLngLat, addNews, GOVS, prodOf, MAXN, warBetween } from './world.js';
 import { declareWar, endWar, annex, DISASTERS } from './sim.js';
-import { newPlan, setDistrictCount, autoFill, randomPlan, UNIT_TYPES, planStats, unitCenter, PARENT_NAME, PARENT_PLURAL, planSplits, importCSV, applyRealPlan, planLayer, PRECINCT_COLORS, defaultElection } from './plans.js';
+import { recomInput, newPlan, setDistrictCount, autoFill, randomPlan, UNIT_TYPES, planStats, unitCenter, PARENT_NAME, PARENT_PLURAL, planSplits, importCSV, applyRealPlan, planLayer, PRECINCT_COLORS, defaultElection } from './plans.js';
 import { FORMULA_VARS, compileFormula, unitAgg } from './themes.js';
 import { listSlots, getSlot, putSlot, delSlot, serialize, deserialize, exportBlob, importBlob } from './store.js';
 import { createWorld } from './world.js';
@@ -440,6 +440,7 @@ function renderDraw(b) {
   b.append(h('div', { class: 'tog-row' },
     toggle(`Paint whole ${PARENT_PLURAL[p.unit]}`, O.parent, (v) => { O.parent = v; }),
     toggle("Don't paint over other districts", O.noOverwrite, (v) => { O.noOverwrite = v; })));
+  b.append(btn('✨ Auto-draw fair districts…', () => openAutoDraw(p), 'wide'));
   b.append(districtChips(p, st));
   if (p.unit === 'precincts') b.append(electionPicker(p));
   if (st) {
@@ -499,6 +500,53 @@ function renderLayersTab(b, p) {
   b.append(section('Data layer', h('div', { class: 'paintwith' }, h('span', null, t.layer === (p.unit === 'cells' ? 'cells' : p.unit) ? t.label : 'Pick a map for these units'), btn('Choose ›', openThemeBrowser, 'sm')),
     h('p', { class: 'muted small' }, p.unit === 'counties' ? 'Try Hispanic %, Black %, Minority % or density under your districts.' : 'Any map for this kind of unit can sit under your districts.')));
   b.append(mapStyleSection());
+}
+// ---- automatic map drawing (ReCom optimiser in a background worker) ----
+export function openAutoDraw(p) {
+  const W = app.W;
+  const goals = app.autoGoals || (app.autoGoals = { compact: true, counties: true, competitive: false, proportional: false, seconds: 20, start: 'current' });
+  const status = h('div', { class: 'muted small' }, 'Ready.');
+  const bar = h('div', { class: 'pbar' }, h('i'));
+  let worker = null;
+  const run = h('button', { class: 'btn primary wide', onclick: () => {
+    if (worker) { worker.postMessage({ type: 'stop' }); return; }
+    const before = p.assign.slice();
+    if (goals.start === 'fresh' || p.assign.some((d, u) => d < 0 && u < p.assign.length && (p.unit !== 'cells' || W.D.cells.country[u]))) randomPlan(W, p);
+    const G = recomInput(W, p);
+    const local = Int16Array.from(G.elig, (u) => Math.max(0, p.assign[u]));
+    try { worker = new Worker('js/recom-worker.js'); } catch (e) { toast('This device cannot run the optimiser: ' + e.message, 5000); return; }
+    run.textContent = 'Stop'; status.textContent = 'Searching…';
+    const apply = (A) => { for (let i = 0; i < G.n; i++) p.assign[G.elig[i]] = A[i]; computePlanStats(); refresh(); };
+    worker.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === 'progress' || m.type === 'done') {
+        apply(m.assign); bar.firstChild.style.width = Math.min(100, m.elapsed / (goals.seconds * 10)) + '%';
+        status.textContent = `${m.steps.toLocaleString()} maps tried · ${m.accepted.toLocaleString()} kept · largest deviation ${pct(m.maxDev, 1)}`;
+      }
+      if (m.type === 'done' || m.type === 'error') {
+        worker.terminate(); worker = null; run.textContent = 'Run again';
+        if (m.type === 'error') { status.textContent = 'Error: ' + m.message; return; }
+        const ch = new Map(); before.forEach((v, u) => { if (v !== p.assign[u]) ch.set(u, v); });
+        if (ch.size) { app.undo.push({ tgt: 'plan', changes: ch, plan: p.id }); app.redo = []; }
+        status.textContent += ' · done (Undo restores your map)'; refreshPanels();
+      }
+    };
+    worker.onerror = (e) => { status.textContent = 'Error: ' + e.message; run.textContent = 'Run again'; worker = null; };
+    worker.postMessage({ type: 'run', n: G.n, k: p.n, off: G.off, nb: G.nb, pop: G.pop, dem: G.dem, rep: G.rep, parent: goals.counties ? G.parent : null, assign: local, timeMs: goals.seconds * 1000, tol: 0.01, goals, seed: (Math.random() * 1e9) | 0 });
+  } }, 'Draw it');
+  const body = h('div', { class: 'form' },
+    h('p', { class: 'muted small' }, 'Uses ReCom — the method MGGG (the makers of Districtr) use to study fair maps: it repeatedly merges two neighbouring districts and splits them again along a random tree, keeping changes that score better. Districts always stay in one piece and within 1% population.'),
+    h('div', { class: 'sec-t' }, 'Goals'),
+    h('div', { class: 'tog-row col' },
+      toggle('Compact shapes', goals.compact, (v) => { goals.compact = v; }),
+      toggle(`Keep ${PARENT_PLURAL[p.unit]} whole`, goals.counties, (v) => { goals.counties = v; }),
+      toggle('More competitive districts', goals.competitive, (v) => { goals.competitive = v; }),
+      toggle('Seats proportional to votes', goals.proportional, (v) => { goals.proportional = v; })),
+    h('label', null, 'Start from', h('select', { onchange: (e) => { goals.start = e.target.value; } }, h('option', { value: 'current', selected: goals.start === 'current' }, 'My current map'), h('option', { value: 'fresh', selected: goals.start === 'fresh' }, 'A fresh random map'))),
+    h('label', { class: 'slider' }, 'Time', h('input', { type: 'range', min: 5, max: 120, step: 5, value: goals.seconds, oninput: (e) => { goals.seconds = +e.target.value; e.target.nextSibling.textContent = goals.seconds + 's'; } }), h('b', null, goals.seconds + 's')),
+    run, bar, status);
+  openModal('Auto-draw districts', body);
+  const mo = $('#modal'); const obs = new MutationObserver(() => { if (mo.classList.contains('hidden') && worker) worker.postMessage({ type: 'stop' }); }); obs.observe(mo, { attributes: true });
 }
 function renderEvalTab(b, p, st) {
   if (!st) return;
