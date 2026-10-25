@@ -147,6 +147,15 @@ jobs:
           npx electron-builder --win --x64 --publish never 2>&1 | tee -a build-win.log
           ls -la dist | tee -a build-win.log
 
+      - name: Start the app once
+        continue-on-error: true
+        working-directory: desktop
+        shell: bash
+        run: |
+          "./dist/win-unpacked/Atlas Forge.exe" --smoke || echo "app exited with $?"
+          cat smoke.txt | tee -a build-win.log
+          grep -q '"ok": true' smoke.txt
+
       - name: Attach to the release
         uses: softprops/action-gh-release@v2
         with:

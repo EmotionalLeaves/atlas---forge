@@ -25,6 +25,13 @@ jobs:
           npm install --no-audit --no-fund 2>&1 | tee build-win.log
           npx electron-builder --win --x64 --publish never 2>&1 | tee -a build-win.log
           ls -la dist | tee -a build-win.log
+      - name: Start the app once
+        working-directory: desktop
+        shell: bash
+        run: |
+          "./dist/win-unpacked/Atlas Forge.exe" --smoke || echo "app exited with $?"
+          cat smoke.txt | tee -a build-win.log
+          grep -q '"ok": true' smoke.txt
       - name: Keep the log
         if: always()
         shell: bash

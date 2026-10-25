@@ -33,6 +33,16 @@ app.whenReady().then(() => {
     if (input.type === 'keyDown' && input.key === 'F11') { win.setFullScreen(!win.isFullScreen()); e.preventDefault(); }
     if (input.type === 'keyDown' && input.control && input.shift && input.key.toLowerCase() === 'i') win.webContents.toggleDevTools();
   });
+  // --smoke: open the app, check it started, write smoke.txt and quit (used by the build to test the Windows app)
+  if (process.argv.includes('--smoke')) {
+    const logs = [];
+    win.webContents.on('console-message', (_e, level, message) => { logs.push(`[${level}] ${message}`); });
+    win.webContents.once('did-finish-load', () => setTimeout(async () => {
+      let ok; try { ok = await win.webContents.executeJavaScript("!!(window.app && app.W && !document.getElementById('loading')) || (document.querySelector('#loading .msg') || {}).textContent"); } catch (e) { ok = 'ERR ' + e.message; }
+      require('fs').writeFileSync(path.join(process.cwd(), 'smoke.txt'), JSON.stringify({ ok, logs: logs.slice(-40) }, null, 1));
+      app.exit(ok === true ? 0 : 1);
+    }, 25000));
+  }
   win.loadURL('app://atlas/index.html');
 });
 app.on('window-all-closed', () => app.quit());
