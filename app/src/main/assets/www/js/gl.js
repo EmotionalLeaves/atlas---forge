@@ -51,6 +51,20 @@ uniform vec2 u_center; uniform float u_scale; uniform vec2 u_view; uniform float
 varying vec4 v_col;
 void main(){ vec2 p=(a_pos+vec2(u_off,0.0)-u_center)*u_scale+u_shift; gl_Position=vec4(p.x*2.0/u_view.x,-p.y*2.0/u_view.y,0.0,1.0); v_col=a_col; }`;
 const LINEC_FS = `precision mediump float; varying vec4 v_col; uniform float u_alpha; void main(){ float a=v_col.a*u_alpha; gl_FragColor=vec4(v_col.rgb*a,a); }`;
+// thick anti-aliased lines: each segment is a quad expanded in screen space
+const THICK_VS = `
+attribute vec2 a_a; attribute vec2 a_b; attribute vec2 a_c;
+uniform vec2 u_center; uniform float u_scale; uniform vec2 u_view; uniform float u_off; uniform float u_w;
+varying float v_side;
+void main(){
+  vec2 pa=(a_a+vec2(u_off,0.0)-u_center)*u_scale, pb=(a_b+vec2(u_off,0.0)-u_center)*u_scale;
+  vec2 d=pb-pa; float L=length(d); vec2 dir = L>1e-6 ? d/L : vec2(1.0,0.0); vec2 n=vec2(-dir.y,dir.x);
+  float hw=u_w*0.5+1.0;
+  vec2 p = mix(pa,pb,a_c.x) + n*a_c.y*hw + dir*(a_c.x*2.0-1.0)*u_w*0.5;
+  gl_Position=vec4(p.x*2.0/u_view.x,-p.y*2.0/u_view.y,0.0,1.0); v_side=a_c.y*hw;
+}`;
+const THICK_FS = `precision mediump float; uniform vec4 u_color; uniform float u_wf; varying float v_side;
+void main(){ float a=u_color.a*clamp(u_wf*0.5+0.5-abs(v_side),0.0,1.0); gl_FragColor=vec4(u_color.rgb*a,a); }`;
 const PT_VS = `
 attribute vec2 a_pos; attribute float a_size; attribute vec4 a_col;
 uniform vec2 u_center; uniform float u_scale; uniform vec2 u_view; uniform float u_off; uniform float u_ps;
@@ -77,7 +91,8 @@ export class MapRenderer {
     if (!gl.getExtension('OES_element_index_uint')) throw new Error('Device GPU lacks 32-bit index support');
     const hp = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
     const fs = hp && hp.precision > 0 ? RASTER_FS : RASTER_FS.replace('precision highp float;', 'precision mediump float;');
-    this.prog = { raster: compile(gl, RASTER_VS, fs), poly: compile(gl, POLY_VS, POLY_FS), line: compile(gl, LINE_VS, LINE_FS), lineC: compile(gl, LINEC_VS, LINEC_FS), pt: compile(gl, PT_VS, PT_FS) };
+    this.prog = { raster: compile(gl, RASTER_VS, fs), poly: compile(gl, POLY_VS, POLY_FS), line: compile(gl, LINE_VS, LINE_FS), lineC: compile(gl, LINEC_VS, LINEC_FS), thick: compile(gl, THICK_VS, THICK_FS), pt: compile(gl, PT_VS, PT_FS) };
+    this.thick = {};
     this.gw = gridW; this.gh = gridH;
     this.cam = { x: 0.53, y: 0.4, s: 1 }; // s = device px per world unit
     this.dpr = Math.min(window.devicePixelRatio || 1, 3);
@@ -158,20 +173,23 @@ export class MapRenderer {
     const gl = this.gl; const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, lpos, gl.STATIC_DRAW);
     this.lines[name] = { buf: b, n: lpos.length / 2, color, visible: true, minS };
   }
-  // dynamic thick lines (district outlines); drawn above polygons, below the selection highlight
-  setOverlayLines(name, lpos, color = [1, 1, 1, 0.95]) {
-    const gl = this.gl; this.overlays = this.overlays || {};
-    if (!lpos || !lpos.length) { delete this.overlays[name]; this.dirty(); return; }
-    const O = this.overlays[name] || (this.overlays[name] = { buf: gl.createBuffer() });
-    gl.bindBuffer(gl.ARRAY_BUFFER, O.buf); gl.bufferData(gl.ARRAY_BUFFER, lpos, gl.DYNAMIC_DRAW); O.n = lpos.length / 2; O.color = color; this.dirty();
-  }
-  setHighlight(lpos, color = [1, 0.85, 0.2, 1]) {
+  // Thick line layer from segment pairs [x0,y0,x1,y1,...]. width in css px; z orders layers (higher on top).
+  setThickLines(name, lpos, color = [1, 1, 1, 1], width = 2, z = 0) {
     const gl = this.gl;
-    if (!lpos || !lpos.length) { this.highlight = null; this.dirty(); return; }
-    if (!this.hbuf) this.hbuf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.hbuf); gl.bufferData(gl.ARRAY_BUFFER, lpos, gl.DYNAMIC_DRAW);
-    this.highlight = { n: lpos.length / 2, color }; this.dirty();
+    if (!lpos || !lpos.length) { const T = this.thick[name]; if (T) { gl.deleteBuffer(T.vb); gl.deleteBuffer(T.ib); delete this.thick[name]; } this.dirty(); return; }
+    const ns = lpos.length / 4, v = new Float32Array(ns * 24), ix = new Uint32Array(ns * 6);
+    for (let s2 = 0; s2 < ns; s2++) {
+      const ax = lpos[s2 * 4], ay = lpos[s2 * 4 + 1], bx = lpos[s2 * 4 + 2], by = lpos[s2 * 4 + 3], o = s2 * 24;
+      for (let k = 0; k < 4; k++) { const q = o + k * 6; v[q] = ax; v[q + 1] = ay; v[q + 2] = bx; v[q + 3] = by; v[q + 4] = k >> 1; v[q + 5] = k & 1 ? 1 : -1; }
+      const b = s2 * 4, io = s2 * 6; ix[io] = b; ix[io + 1] = b + 1; ix[io + 2] = b + 2; ix[io + 3] = b + 1; ix[io + 4] = b + 3; ix[io + 5] = b + 2;
+    }
+    const T = this.thick[name] || (this.thick[name] = { vb: gl.createBuffer(), ib: gl.createBuffer() });
+    gl.bindBuffer(gl.ARRAY_BUFFER, T.vb); gl.bufferData(gl.ARRAY_BUFFER, v, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, T.ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, ix, gl.DYNAMIC_DRAW);
+    Object.assign(T, { n: ns * 6, color, width, z, visible: true }); this.dirty();
   }
+  setOverlayLines(name, lpos, color = [1, 1, 1, 0.95]) { this.setThickLines(name, lpos, color, 2.6, 5); }
+  setHighlight(lpos, color = [1, 0.85, 0.2, 1]) { this.setThickLines('_highlight', lpos && lpos.length ? lpos : null, color, 3.2, 10); }
   setPoints(pos, size, col) { // Float32 xy, Float32 size, Uint8 rgba
     const gl = this.gl; const mk = (d) => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, d, gl.DYNAMIC_DRAW); return b; };
     if (this.points) { for (const k of ['pb', 'sb', 'cb']) gl.deleteBuffer(this.points[k]); }
@@ -233,8 +251,17 @@ export class MapRenderer {
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     const left = c.x - this.vw / 2 / c.s, right = c.x + this.vw / 2 / c.s;
     const offs = []; for (let k = Math.floor(left); k <= Math.floor(right) && offs.length < 4; k++) offs.push(k);
-    // land mask into the stencil buffer (smooth real coastlines for the cell grid)
     let P;
+    // polygon layers drawn underneath the cell raster (e.g. province colours behind war-front cells)
+    for (const L of Object.values(this.polys)) {
+      if (!L.under || !L.visible) continue;
+      P = this.prog.poly; gl.useProgram(P.p);
+      this._attr(P, 'a_pos', L.pos, 2); this._attr(P, 'a_col', L.col, 4, gl.UNSIGNED_BYTE, true);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, L.idx); gl.uniform1f(P.u.u_alpha, L.alpha * this.opts.opacity);
+      for (const o of offs) { this._common(P, o); gl.drawElements(gl.TRIANGLES, L.n, gl.UNSIGNED_INT, 0); }
+      this._disableAttrs();
+    }
+    // land mask into the stencil buffer (smooth real coastlines for the cell grid)
     const M = this.mask && this.opts.clip !== false ? this.mask : null;
     if (M) {
       const land = this.polys[M.land];
@@ -266,7 +293,7 @@ export class MapRenderer {
     if (M) gl.disable(gl.STENCIL_TEST);
     // polygons
     for (const L of (this.polyOrder || Object.keys(this.polys)).map((k) => this.polys[k])) {
-      if (!L || !L.visible) continue;
+      if (!L || !L.visible || L.under) continue;
       P = this.prog.poly; gl.useProgram(P.p);
       this._attr(P, 'a_pos', L.pos, 2); this._attr(P, 'a_col', L.col, 4, gl.UNSIGNED_BYTE, true);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, L.idx); gl.uniform1f(P.u.u_alpha, L.alpha * this.opts.opacity);
@@ -291,15 +318,22 @@ export class MapRenderer {
       this._attr(P, 'a_pos', L.buf, 2); gl.uniform4fv(P.u.u_color, L.color);
       for (const o of offs) { this._common(P, o); gl.drawArrays(gl.LINES, 0, L.n); }
     }
-    for (const O of Object.values(this.overlays || {})) {
-      this._attr(P, 'a_pos', O.buf, 2); gl.uniform4fv(P.u.u_color, O.color);
-      const d = this.dpr * 0.75;
-      for (const o of offs) for (const sh of [[0, 0], [d, 0], [0, d], [d, d]]) { this._common(P, o, sh); gl.drawArrays(gl.LINES, 0, O.n); }
-    }
-    if (this.highlight) {
-      this._attr(P, 'a_pos', this.hbuf, 2); gl.uniform4fv(P.u.u_color, this.highlight.color);
-      const d = this.dpr;
-      for (const o of offs) for (const sh of [[0, 0], [d, 0], [0, d], [-d, 0], [0, -d]]) { this._common(P, o, sh); gl.drawArrays(gl.LINES, 0, this.highlight.n); }
+    this._disableAttrs();
+    const TL = Object.values(this.thick).filter((T) => T.visible !== false && T.n).sort((a, b) => a.z - b.z);
+    if (TL.length) {
+      P = this.prog.thick; gl.useProgram(P.p);
+      for (const T of TL) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, T.vb);
+        gl.enableVertexAttribArray(P.a.a_a); gl.vertexAttribPointer(P.a.a_a, 2, gl.FLOAT, false, 24, 0);
+        gl.enableVertexAttribArray(P.a.a_b); gl.vertexAttribPointer(P.a.a_b, 2, gl.FLOAT, false, 24, 8);
+        gl.enableVertexAttribArray(P.a.a_c); gl.vertexAttribPointer(P.a.a_c, 2, gl.FLOAT, false, 24, 16);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, T.ib);
+        const w = (typeof T.width === 'function' ? T.width(c.s / this.dpr) : T.width) * this.dpr;
+        gl.uniform1f(P.u.u_w, w); gl.uniform1f(P.u.u_wf, w); gl.uniform4fv(P.u.u_color, T.color);
+        for (const o of offs) { this._common(P, o); gl.drawElements(gl.TRIANGLES, T.n, gl.UNSIGNED_INT, 0); }
+        this._disableAttrs();
+      }
+      P = this.prog.line; gl.useProgram(P.p);
     }
     this._disableAttrs();
     // points

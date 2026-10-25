@@ -291,6 +291,8 @@ for (let cy = 0; cy < CH; cy++) for (let cx = 0; cx < CW; cx++) {
     if (river >= 3) cFlags[ci] |= 1;
   } else { cTerrain[ci] = lake >= 13 ? T.LAKE : T.WATER; if (lake >= 13) cFlags[ci] |= 4; }
 }
+// a cell belongs to the country of its province, so province shapes and cell ownership always agree
+for (let ci = 0; ci < N; ci++) { const a = cAdmin[ci]; if (a && cCountry[ci]) { const c = admin1[a - 1].country; if (c) cCountry[ci] = c; } }
 // move pop off water cells to nearest land cell of any country
 for (let ci = 0; ci < N; ci++) {
   if (cCountry[ci] || !cPop[ci]) continue;
@@ -348,18 +350,58 @@ function dp(pts, tol) { // Douglas-Peucker on [lng,lat]
   return pts.filter((_, i) => keep[i]);
 }
 const merc = (lng, lat) => { lat = Math.max(-85.05, Math.min(85.05, lat)); const s = Math.sin(lat * Math.PI / 180); return [(lng + 180) / 360, 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)]; };
-function buildGeom(features, tol, file, withFill = true, uidOf = (f, u) => u, nbOf = null) {
+// Topology-preserving simplification: rings are cut into arcs at junctions (where the set of
+// polygons sharing an edge changes); each arc is simplified once, so neighbours keep identical borders.
+function topoSimplify(features, tol) {
+  const QD = 1e6, qk = (p) => Math.round(p[0] * QD) + ',' + Math.round(p[1] * QD);
+  const polys = features.map((f) => polysOf(f.geometry).map((poly) => poly.map((ring) => {
+    const out = []; let last = ''; for (const p of ring) { const k = qk(p); if (k !== last) out.push([Math.round(p[0] * QD) / QD, Math.round(p[1] * QD) / QD]); last = k; }
+    if (out.length > 1 && qk(out[0]) === qk(out[out.length - 1])) out.pop(); return out;
+  }).filter((r) => r.length >= 3)));
+  const ek = (a, b) => { const ka = qk(a), kb = qk(b); return ka < kb ? ka + '|' + kb : kb + '|' + ka; };
+  const users = new Map();
+  polys.forEach((ps, u) => ps.forEach((rings) => rings.forEach((r) => { for (let k = 0; k < r.length; k++) { const key = ek(r[k], r[(k + 1) % r.length]); const v = users.get(key); users.set(key, v === undefined ? u : v === u ? u : v * 65536 + u + 1e10); } })));
+  const cache = new Map();
+  const simplifyArc = (arc) => {
+    const a = qk(arc[0]), b = qk(arc[arc.length - 1]);
+    const fwd = a < b || (a === b && qk(arc[1]) <= qk(arc[arc.length - 2]));
+    const norm = fwd ? arc : arc.slice().reverse(), key = norm.map(qk).join(';');
+    let res = cache.get(key); if (!res) { res = dp(norm, tol); cache.set(key, res); }
+    return fwd ? res : res.slice().reverse();
+  };
+  let vin = 0, vout = 0;
+  const out = polys.map((ps) => ps.map((rings) => rings.map((r) => {
+    const n = r.length; vin += n; const sig = (i) => users.get(ek(r[(i - 1 + n) % n], r[i])), j = new Uint8Array(n);
+    for (let k = 0; k < n; k++) if (sig(k) !== users.get(ek(r[k], r[(k + 1) % n]))) j[k] = 1;
+    const start = j.indexOf(1); let res;
+    if (start < 0) { res = dp([...r, r[0]], tol).slice(0, -1); }
+    else { res = []; let arc = [r[start]]; for (let s2 = 1; s2 <= n; s2++) { const k = (start + s2) % n; arc.push(r[k]); if (j[k]) { res.push(...simplifyArc(arc).slice(0, -1)); arc = [r[k]]; } } }
+    if (res.length < 3) res = r.length >= 3 ? r.slice() : res;
+    vout += res.length; return [...res, res[0]]; // closed ring, like GeoJSON
+  }).filter((r) => r.length >= 4)).filter((rs) => rs.length));
+  log('topo', vin, '->', vout, 'vertices');
+  return out;
+}
+function buildGeom(features, tol, file, withFill = true, uidOf = (f, u) => u, nbOf = null, topo = false) {
   const pos = [], uid = [], idx = [], lpos = [], luid = [], lnb = [];
+  const TP = topo ? topoSimplify(features, tol) : null;
+  const segOwner = new Map(), sk = (a, b) => { const ka = a[0].toFixed(6) + ',' + a[1].toFixed(6), kb = b[0].toFixed(6) + ',' + b[1].toFixed(6); return ka < kb ? ka + '|' + kb : kb + '|' + ka; };
   features.forEach((f, fi) => {
     const u = uidOf(f, fi);
-    for (const poly of polysOf(f.geometry)) {
-      const rings = poly.map((r) => dp(r, tol)).filter((r) => r.length >= 4);
+    for (const [pi, poly] of (TP ? TP[fi].map((x, k) => [k, x]) : polysOf(f.geometry).entries())) {
+      const rings = TP ? poly : poly.map((r) => dp(r, tol)).filter((r) => r.length >= 4);
       if (!rings.length) continue;
       for (const r of rings) for (let k = 0; k + 1 < r.length; k++) {
         const a = merc(r[k][0], r[k][1]), b = merc(r[k + 1][0], r[k + 1][1]);
         if (Math.abs(r[k][0]) === 180 && r[k][0] === r[k + 1][0]) continue; // skip antimeridian cuts
+        const seg = luid.length / 2;
         lpos.push(a[0], a[1], b[0], b[1]); luid.push(u, u);
-        if (nbOf) { const v = nbOf(u, r[k][0], r[k][1], r[k + 1][0], r[k + 1][1]); lnb.push(v, v); }
+        if (nbOf) {
+          let v = 65535;
+          if (topo) { const key = sk(r[k], r[k + 1]), o = segOwner.get(key); if (o && o[0] !== u) { v = o[0]; if (lnb[o[1] * 2] === 65535) lnb[o[1] * 2] = lnb[o[1] * 2 + 1] = u; } else if (!o) segOwner.set(key, [u, seg]); }
+          if (v === 65535) v = nbOf(u, r[k][0], r[k][1], r[k + 1][0], r[k + 1][1]);
+          lnb.push(v, v);
+        }
       }
       if (!withFill) continue;
       const flat = [], holes = [];
@@ -390,19 +432,19 @@ const sideNb = (arr) => (u, x1, y1, x2, y2) => {
   }
   return 65535;
 };
-const geomProv = buildGeom(admin1G, 0.02, 'geom_prov.bin', true, (f, u) => u, sideNb(fAdmin));
-const geomCounty = buildGeom(countiesG, 0.006, 'geom_county.bin', true, (f, u) => u, sideNb(fCounty));
+const geomProv = buildGeom(admin1G, 0.0035, 'geom_prov.bin', true, (f, u) => u, sideNb(fAdmin), true);
+const geomCounty = buildGeom(countiesG, 0.0015, 'geom_county.bin', true, (f, u) => u, sideNb(fCounty), true);
 // land mask + smooth country fills: 10m countries, uid = our country index (or countries.length when unmatched)
 const countries10 = rd('ne/geojson/ne_10m_admin_0_countries.geojson').features;
-const geomCountry = buildGeom(countries10, 0.012, 'geom_country.bin', true, (f) => { const k = countryByA3.get(f.properties.ADM0_A3); return k ? k - 1 : countries.length; });
+
 const lakes10 = rd('ne/geojson/ne_10m_lakes.geojson').features.filter((f) => (f.properties.scalerank ?? 0) <= 8);
-const geomLakes = buildGeom(lakes10, 0.012, 'geom_lakes.bin', true, () => 0);
+const geomLakes = buildGeom(lakes10, 0.004, 'geom_lakes.bin', true, () => 0);
 
 // ---------- units.json ----------
 const r3 = (v) => v == null ? null : Math.round(v * 1000) / 1000;
 const units = {
   grid: { W: CW, H: CH, res: CRES, layout },
-  geom: { prov: geomProv, county: geomCounty, country: geomCountry, lakes: geomLakes },
+  geom: { prov: geomProv, county: geomCounty, lakes: geomLakes },
   terrains: ['Ocean', 'Lake', 'Ice', 'Polar', 'Tundra', 'Boreal forest', 'Temperate', 'Tropical', 'Desert', 'Mountains', 'Highlands', 'River delta'],
   countries: countries.map((c) => ({ ...c, label: [r3(c.label[0]), r3(c.label[1])] })),
   provinces: admin1.map((a) => ({ n: a.name, c: a.country, t: a.type, r: a.region, iso: a.iso, pop: a.pop, area: a.area, perim: a.perim, l: [r3(a.label[0]), r3(a.label[1])] })),

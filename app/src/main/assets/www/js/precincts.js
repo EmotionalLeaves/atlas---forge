@@ -1,7 +1,9 @@
 // Real US precinct data packs (from MGGG States): downloaded once per state, then kept on the device.
 import { getPack, putPack } from './store.js';
 
+// Bundled in the app first; the online copies are only a fallback.
 export const PACK_SOURCES = [
+  'packs/',
   'https://raw.githubusercontent.com/EmotionalLeaves/atlas---forge/main/packs/',
   'https://cdn.jsdelivr.net/gh/EmotionalLeaves/atlas---forge@main/packs/',
 ];

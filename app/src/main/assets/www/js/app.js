@@ -42,14 +42,17 @@ export async function boot() {
     app.R = new MapRenderer(document.getElementById('gl'), document.getElementById('labels'), W0, H0);
     app.cellRGBA = new Uint8Array(W0 * H0 * 4); app.groupRGBA = new Uint8Array(W0 * H0 * 4); app.baseRGBA = new Uint8Array(W0 * H0 * 4);
     app.R.addPolyLayer('provinces', D.geom.prov); app.R.addPolyLayer('counties', D.geom.county);
-    app.R.addPolyLayer('countryFill', D.geom.country, { lineColors: true });
     app.R.addPolyLayer('nationProv', D.geom.prov, { share: 'provinces', lineColors: true });
-    app.R.polyOrder = ['countryFill', 'nationProv', 'provinces', 'counties', 'precincts'];
+    const under = app.R.addPolyLayer('nationUnder', D.geom.prov, { share: 'provinces' }); under.under = true;
+    app.R.polyOrder = ['nationProv', 'provinces', 'counties', 'precincts'];
     D.packs = {};
-    app.R.setLandMask('countryFill', D.geom.lakes);
+    app.R.setLandMask('provinces', D.geom.lakes);
     app.unitRGBA = { provinces: new Uint8Array(D.units.provinces.length * 4), counties: new Uint8Array(D.units.counties.length * 4) };
     prepareSmooth(D, W0, H0);
-    app.R.addLineLayer('countries', D.geom.country.lpos, [0.92, 0.94, 1, 0.22], 0);
+    // real (2026) country borders = province edges between different countries
+    { const g = D.geom.prov, P = D.units.provinces, out = [];
+      for (let k = 0; k < g.luid.length; k += 2) { const u = g.luid[k], v = g.lnb[k]; if (v === 65535 || u > v || P[u].c === P[v].c) continue; out.push(g.lpos[k * 2], g.lpos[k * 2 + 1], g.lpos[k * 2 + 2], g.lpos[k * 2 + 3]); }
+      app.R.setThickLines('realBorders', new Float32Array(out), [0.95, 0.96, 1, 0.55], (s) => s < 600 ? 0.8 : s < 3000 ? 1.2 : 1.8, 1); }
     app.R.addLineLayer('provLines', D.geom.prov.lpos, [0.04, 0.05, 0.08, 0.55], 0); app.R.lines.provLines.visible = false;
     app.R.addLineLayer('countyLines', D.geom.county.lpos, [0.03, 0.04, 0.06, 0.7], 0); app.R.lines.countyLines.visible = false;
     setupCities();
@@ -184,8 +187,8 @@ function refreshInner() {
     app.R.setPolyColors(poly, arr);
     app.R.polys[poly].alpha = 0.93;
   }
-  app.R.opts.grid = app.show.grid && !(app.basemap && app.basemap.online);
-  app.R.lines.countries.visible = app.show.borders || (!!p && p.unit === 'provinces' && app.drawOpts.boundaries);
+  app.R.opts.grid = app.show.grid && !app.smooth && !(app.basemap && app.basemap.online);
+  app.R.thick.realBorders.visible = (app.show.borders && app.smooth !== 'owner') || (!!p && p.unit === 'provinces' && app.drawOpts.boundaries);
   app.R.lines.provLines.visible = !!p && (p.unit === 'cells' || p.unit === 'counties') && app.drawOpts.boundaries;
   app.R.lines.countyLines.visible = (!!p && p.unit === 'precincts' && app.drawOpts.boundaries) || (poly === 'precincts' && !p);
   if (!poly) districtOutlines(null);
@@ -253,56 +256,81 @@ function prepareSmooth(D, Wd, Hd) {
   for (let i = 0; i < N; i++) if (country[i] && admin[i]) items[fill[admin[i]]++] = i;
   app.provCells = { start: cnt, items };
   app.provPure = new Uint8Array(nP);
-  app.polyRGBA = { nationProv: new Uint8Array(D.units.provinces.length * 4), nationProvLine: new Uint8Array(D.units.provinces.length * 4), countryFill: new Uint8Array((D.units.countries.length + 1) * 4), countryLine: new Uint8Array((D.units.countries.length + 1) * 4) };
+  app.polyRGBA = { nationProv: new Uint8Array(D.units.provinces.length * 4), nationProvLine: new Uint8Array(D.units.provinces.length * 4) };
   // a land cell inside each tiny province / country that has no cells of its own
   app.provProbe = D.units.provinces.map((p) => cellAt({ Wd, Hd }, p.l[0] ?? 0, p.l[1] ?? 0));
 }
 const darken = (a, o, src, f) => { a[o] = src[0] * f; a[o + 1] = src[1] * f; a[o + 2] = src[2] * f; };
 function applySmooth() {
   const W = app.W, R = app.R, out = app.cellRGBA, mode = app.smooth;
-  R.polys.nationProv.visible = mode === 'owner'; R.polys.countryFill.visible = mode === 'country';
+  R.polys.nationProv.visible = !!mode; R.polys.nationUnder.visible = mode === 'owner';
+  R.opts.grid = app.show.grid && !mode && !(app.basemap && app.basemap.online);
+  if (mode !== 'owner') R.setThickLines('nationBorders', null);
   if (!mode) return;
   const D = W.D, base = app.baseRGBA;
   if (mode === 'owner') {
     const { start, items } = app.provCells, nP = D.units.provinces.length, fillA = app.polyRGBA.nationProv, lineA = app.polyRGBA.nationProvLine;
-    const ownerColor = new Map();
+    const ownerColor = new Map(), underA = app.polyRGBA.under || (app.polyRGBA.under = new Uint8Array(nP * 4));
     for (let p = 1; p <= nP; p++) {
       const o4 = (p - 1) * 4; let pure = 1, own = -1, first = -1;
       for (let k = start[p]; k < start[p + 1]; k++) { const i = items[k], ow = W.owner[i]; if (own < 0) { own = ow; first = i; } else if (ow !== own) { pure = 0; break; } }
       if (first < 0) { // tiny province without cells: colour by whoever holds the land it sits on
         const pr = app.provProbe[p - 1], ow = pr >= 0 && D.cells.country[pr] ? W.owner[pr] : D.units.provinces[p - 1].c;
         const col = ownerColor.get(ow); if (!col || !ow || !W.nations[ow] || !W.nations[ow].alive) { fillA[o4 + 3] = 0; lineA[o4 + 3] = 0; app.provPure[p] = 0; continue; }
-        fillA[o4] = col[0]; fillA[o4 + 1] = col[1]; fillA[o4 + 2] = col[2]; fillA[o4 + 3] = 255; darken(lineA, o4, col, 0.55); lineA[o4 + 3] = 150; app.provPure[p] = 1; continue;
+        fillA[o4] = col[0]; fillA[o4 + 1] = col[1]; fillA[o4 + 2] = col[2]; fillA[o4 + 3] = 255; darken(lineA, o4, col, 0.62); lineA[o4 + 3] = 70; app.provPure[p] = 1; continue;
       }
       app.provPure[p] = pure;
       const b = first * 4, col = [base[b], base[b + 1], base[b + 2]];
       if (!ownerColor.has(own)) ownerColor.set(own, col);
       if (pure) {
-        fillA[o4] = col[0]; fillA[o4 + 1] = col[1]; fillA[o4 + 2] = col[2]; fillA[o4 + 3] = 255; darken(lineA, o4, col, 0.55); lineA[o4 + 3] = 150;
+        fillA[o4] = col[0]; fillA[o4 + 1] = col[1]; fillA[o4 + 2] = col[2]; fillA[o4 + 3] = 255; darken(lineA, o4, col, 0.62); lineA[o4 + 3] = 70;
         for (let k = start[p]; k < start[p + 1]; k++) out[items[k] * 4 + 3] = 0;
-      } else { fillA[o4 + 3] = 0; lineA[o4] = lineA[o4 + 1] = lineA[o4 + 2] = 20; lineA[o4 + 3] = 70; }
+      } else {
+        fillA[o4 + 3] = 0; lineA[o4] = lineA[o4 + 1] = lineA[o4 + 2] = 20; lineA[o4 + 3] = 70;
+        // underneath: the colour of whoever holds most of the province (fills gaps between cells and real borders)
+        const cnt = new Map(); let bo = -1, bn = 0, bi = first;
+        for (let k = start[p]; k < start[p + 1]; k++) { const i = items[k], ow = W.owner[i], c = (cnt.get(ow) || 0) + 1; cnt.set(ow, c); if (c > bn) { bn = c; bo = ow; bi = i; } }
+        const ub = bi * 4; underA[o4] = base[ub]; underA[o4 + 1] = base[ub + 1]; underA[o4 + 2] = base[ub + 2]; underA[o4 + 3] = 255;
+      }
+      if (pure) underA[o4 + 3] = 0;
     }
     // second pass for cell-less provinces that came before their owner's first province
     for (let p = 1; p <= nP; p++) {
       if (start[p] !== start[p + 1]) continue; const o4 = (p - 1) * 4; if (fillA[o4 + 3]) continue;
       const pr = app.provProbe[p - 1], ow = pr >= 0 && D.cells.country[pr] ? W.owner[pr] : D.units.provinces[p - 1].c, col = ownerColor.get(ow);
-      if (col && ow && W.nations[ow] && W.nations[ow].alive) { fillA[o4] = col[0]; fillA[o4 + 1] = col[1]; fillA[o4 + 2] = col[2]; fillA[o4 + 3] = 255; darken(lineA, o4, col, 0.55); lineA[o4 + 3] = 150; }
+      if (col && ow && W.nations[ow] && W.nations[ow].alive) { fillA[o4] = col[0]; fillA[o4 + 1] = col[1]; fillA[o4 + 2] = col[2]; fillA[o4 + 3] = 255; darken(lineA, o4, col, 0.62); lineA[o4 + 3] = 70; }
     }
     // pure-province cells in the coastal fringe must hide too
     const F = app.fringe; for (let k = 0; k < F.cell.length; k++) if (out[F.src[k] * 4 + 3] === 0) out[F.cell[k] * 4 + 3] = 0;
     R.setPolyColors('nationProv', fillA, lineA); R.polys.nationProv.alpha = 1; R.polys.nationProv.lineAlpha = 1;
+    R.setPolyColors('nationUnder', underA); R.polys.nationUnder.alpha = 1; R.polys.nationUnder.lineColor = [0, 0, 0, 0];
+    nationBorderLines(ownerColor);
   } else {
-    const nC = D.units.countries.length, fillA = app.polyRGBA.countryFill, lineA = app.polyRGBA.countryLine, seen = new Uint8Array(nC + 1);
-    fillA.fill(0); lineA.fill(0);
-    for (const i of W.land) {
-      const c = D.cells.country[i] - 1; if (c < 0 || seen[c]) continue; seen[c] = 1;
-      const b = i * 4, o4 = c * 4; fillA[o4] = base[b]; fillA[o4 + 1] = base[b + 1]; fillA[o4 + 2] = base[b + 2]; fillA[o4 + 3] = 255;
-      darken(lineA, o4, [base[b], base[b + 1], base[b + 2]], 0.5); lineA[o4 + 3] = 190;
+    // country themes: every province takes its (real) country's colour
+    const P = D.units.provinces, nP = P.length, fillA = app.polyRGBA.nationProv, lineA = app.polyRGBA.nationProvLine, colOf = new Map();
+    for (const i of W.land) { const c = D.cells.country[i]; if (c && !colOf.has(c)) { const b = i * 4; colOf.set(c, [base[b], base[b + 1], base[b + 2]]); } }
+    for (let u = 0; u < nP; u++) {
+      const o4 = u * 4, col = colOf.get(P[u].c);
+      if (!col) { fillA[o4 + 3] = 0; lineA[o4 + 3] = 0; continue; }
+      fillA[o4] = col[0]; fillA[o4 + 1] = col[1]; fillA[o4 + 2] = col[2]; fillA[o4 + 3] = 255; darken(lineA, o4, col, 0.62); lineA[o4 + 3] = 55;
     }
     for (const i of W.land) out[i * 4 + 3] = 0;
     const F = app.fringe; for (let k = 0; k < F.cell.length; k++) out[F.cell[k] * 4 + 3] = 0;
-    R.setPolyColors('countryFill', fillA, lineA); R.polys.countryFill.alpha = 1; R.polys.countryFill.lineAlpha = 1;
+    R.setPolyColors('nationProv', fillA, lineA); R.polys.nationProv.alpha = 1; R.polys.nationProv.lineAlpha = 1;
   }
+}
+// Dark border line wherever two whole provinces belong to different nations.
+function nationBorderLines() {
+  const W = app.W, D = W.D, g = D.geom.prov, { start, items } = app.provCells, nP = D.units.provinces.length;
+  const own = new Int32Array(nP).fill(-1);
+  for (let p = 1; p <= nP; p++) if (app.provPure[p] && start[p] < start[p + 1]) own[p - 1] = W.owner[items[start[p]]];
+  const out = [];
+  for (let k = 0; k < g.luid.length; k += 2) {
+    const u = g.luid[k], v = g.lnb[k]; if (v === 65535 || u > v) continue;
+    const a = own[u], b = own[v]; if (a < 0 || b < 0 || a === b) continue;
+    out.push(g.lpos[k * 2], g.lpos[k * 2 + 1], g.lpos[k * 2 + 2], g.lpos[k * 2 + 3]);
+  }
+  app.R.setThickLines('nationBorders', new Float32Array(out), [0.07, 0.08, 0.11, 0.9], (s) => s < 600 ? 0.9 : s < 3000 ? 1.4 : 2.2, 2);
 }
 // Painting inside a smooth province breaks it back into cells so the change is visible immediately.
 function unsmoothFor(list) {
