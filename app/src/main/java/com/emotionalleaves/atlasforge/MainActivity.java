@@ -198,6 +198,8 @@ public class MainActivity extends Activity {
         if (path.endsWith(".json")) return "application/json";
         if (path.endsWith(".svg")) return "image/svg+xml";
         if (path.endsWith(".png")) return "image/png";
+        if (path.endsWith(".ttf")) return "font/ttf";
+        if (path.endsWith(".woff2")) return "font/woff2";
         return "application/octet-stream";
     }
 

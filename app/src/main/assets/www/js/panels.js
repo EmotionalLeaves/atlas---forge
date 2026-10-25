@@ -35,11 +35,15 @@ const ICON = {
   dropper: '<svg viewBox="0 0 24 24"><path d="M14 4l6 6-2 2-6-6zM12 8l-7.5 7.5L4 20l4.5-.5L16 12"/></svg>',
   undo: '<svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></svg>',
   redo: '<svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5M20 9H10a6 6 0 0 0 0 12h3"/></svg>',
+  layers: '<svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>',
+  play: '<svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z" fill="currentColor"/></svg>',
+  pause: '<svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" stroke-width="3.2"/></svg>',
   trophy: '<svg viewBox="0 0 24 24"><path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H4c0 3 2 5 4 5M16 6h4c0 3-2 5-4 5M12 13v4M8 20h8"/></svg>',
 };
 const icon = (k) => h('span', { class: 'ic', html: ICON[k] });
 
 export function init() {
+  if (document.fonts) document.fonts.load("600 13px 'Barlow SC'").then(() => app.R && app.R.dirty()).catch(() => {});
   app.onLevelStatus = levelStatusHook;
   let lg = 0; app.onLegend = () => { clearTimeout(lg); lg = setTimeout(() => { if (app.mode === 'explore') refreshPanels(); else mapLegend(); }, 300); };
   const tabs = $('#tabs');
@@ -52,18 +56,22 @@ export function init() {
   fl.append(h('button', { class: 'fab', 'aria-label': 'Search places', onclick: openSearch, html: ICON.search }),
     h('button', { class: 'fab', 'aria-label': 'Zoom in', onclick: () => app.R.zoomAt(...app.R.visibleCenter, 2), html: ICON.plus }),
     h('button', { class: 'fab', 'aria-label': 'Zoom out', onclick: () => app.R.zoomAt(...app.R.visibleCenter, 0.5), html: ICON.minus }),
-    h('button', { class: 'fab', 'aria-label': 'Whole world', onclick: worldView, html: ICON.home }));
+    h('button', { class: 'fab', 'aria-label': 'Whole world', onclick: worldView, html: ICON.home }),
+    h('button', { class: 'fab', id: 'layersFab', 'aria-label': 'Map layers', onclick: openLayers, html: ICON.layers }));
   // keep track of how much of the map the sheet covers so the camera frames the visible part
   const sheet = $('#sheet');
   const updPad = () => {
     const r = sheet.getBoundingClientRect(), wide = window.innerWidth >= 760;
     app.R.pad = wide ? { l: r.right, b: 0 } : { l: 0, b: Math.max(0, window.innerHeight - r.top) };
     $('#attr').style.bottom = (wide ? 6 : app.R.pad.b + 4) + 'px';
-    const ml = $('#mapLegend'); if (ml) { ml.style.bottom = (wide ? 12 : app.R.pad.b + 10) + 'px'; ml.style.left = (wide ? r.right + 12 : 10) + 'px'; }
+    const ml = $('#mapLegend'), dk = $('#dock'), dockH = dk && !dk.hidden ? dk.getBoundingClientRect().height + 10 : 0;
+    if (dk) { dk.style.bottom = (wide ? 14 : app.R.pad.b + 10) + 'px'; dk.style.left = (wide ? r.right + 14 : 10) + 'px'; dk.classList.toggle('tucked', !wide && app.R.pad.b > window.innerHeight * 0.66); }
+    if (ml) { ml.style.bottom = (wide ? 14 + dockH : app.R.pad.b + 10 + dockH) + 'px'; ml.style.left = (wide ? r.right + 12 : 10) + 'px'; }
+    app.updPad = updPad;
   };
   if (window.ResizeObserver) new ResizeObserver(updPad).observe(sheet);
   window.addEventListener('resize', updPad); sheet.addEventListener('transitionend', updPad); updPad();
-  requestAnimationFrame(() => { updPad(); worldView(); });
+  requestAnimationFrame(() => { updPad(); worldView(); setTimeout(() => { updPad(); worldView(); }, 300); });
   setupSheet();
   window.atlasBack = () => {
     if (!$('#modal').classList.contains('hidden')) { closeModal(); return true; }
@@ -78,7 +86,7 @@ export function init() {
 export function worldView() {
   const R = app.R, p = R.pad || { l: 0, b: 0 }, w = R.vw / R.dpr - p.l, hh = R.vh / R.dpr - p.b;
   const y0 = mercY(78), y1 = mercY(-56), sH = hh / (y1 - y0), sW = w; // css px per world unit
-  R.cam.s = Math.min(sH, sW * 1.3) * R.dpr * 0.98; R.clampCam(); R._centerOn(mercX(20), (y0 + y1) / 2); R.clampCam(); R.dirty();
+  R.cam.s = Math.min(sH, sW * 2.1) * R.dpr * 0.98; R.clampCam(); R._centerOn(mercX(20), (y0 + y1) / 2); R.clampCam(); R.dirty();
 }
 // Bottom sheet with three heights: peek (just the essentials), half, and nearly full screen. Drag or tap the handle.
 const SHEET_H = { peek: () => 148, half: () => Math.round(window.innerHeight * 0.42), full: () => Math.round(window.innerHeight * 0.86) };
@@ -98,8 +106,8 @@ function setupSheet() {
     setSheet(best);
   };
   grab.addEventListener('pointerup', end); grab.addEventListener('pointercancel', end);
-  window.addEventListener('resize', () => setSheet(app.sheet || 'half'));
-  setSheet('half');
+  window.addEventListener('resize', () => setSheet(app.sheet || 'peek'));
+  setSheet('peek');
 }
 export function setMode(m) {
   if (m === 'draw' && app.mode !== 'draw') { app.tool = plan() ? 'brush' : 'pan'; }
@@ -120,6 +128,67 @@ export function toast(text, ms = 2600) {
   const t = $('#toast'); t.textContent = text; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms);
 }
 
+// ------------------------------------------------------------------ the dock
+// One floating instrument bar above the sheet: drawing tools in Draw / God mode, the clock in Simulate.
+function renderDock() {
+  const dk = $('#dock'); if (!dk) return;
+  dk.innerHTML = ''; let content = null;
+  if (app.mode === 'draw' && plan() && !(plan().unit === 'precincts' && !planLayer(app.W, plan())) && ['paint', 'coi'].includes(app.drawTab)) content = drawDock(plan());
+  else if (app.mode === 'sim') content = simDock();
+  else if (app.mode === 'edit' && ['borders', 'data'].includes(app.editTool) && (app.editTool === 'data' || app.paintChosen)) content = editDock();
+  dk.hidden = !content; if (content) dk.append(...[].concat(content));
+  dk.dataset.mode = app.mode;
+  if (app.updPad) app.updPad();
+}
+const toolBtn = (t, ic, label, after) => h('button', { class: 'tool' + (app.tool === t ? ' on' : ''), 'aria-label': label, 'aria-pressed': String(app.tool === t), onclick: () => { app.tool = t; if (after) after(t); refreshPanels(); } }, h('span', { class: 'ti', html: ICON[ic] }), h('small', null, label));
+const undoBtns = () => [h('div', { class: 'undo2' },
+  h('button', { 'aria-label': 'Undo', disabled: !app.undo.length, onclick: () => undoRedo(false), html: ICON.undo }),
+  h('button', { 'aria-label': 'Redo', disabled: !app.redo.length, onclick: () => undoRedo(true), html: ICON.redo }))];
+function brushStepper() {
+  if (!['brush', 'erase'].includes(app.tool)) return null;
+  const set = (v) => { app.brush = clamp(v, 1, 16); refreshPanels(); };
+  return h('div', { class: 'stepper', title: 'Brush size' }, h('button', { 'aria-label': 'Smaller brush', onclick: () => set(app.brush - 1) }, '−'), h('b', null, app.brush), h('button', { 'aria-label': 'Bigger brush', onclick: () => set(app.brush + 1) }, '+'));
+}
+// painting needs the map, so tools that paint fold the sheet down
+const foldSheet = (t) => { if (['brush', 'erase', 'fill'].includes(t) && app.sheet !== 'peek' && window.innerWidth < 760) setSheet('peek'); };
+function drawDock(p) {
+  const st = app.stats, coi = app.drawTab === 'coi';
+  const tools = coi ? [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['erase', 'eraser', 'Erase']] : [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['erase', 'eraser', 'Erase'], ['fill', 'bucket', 'Fill'], ['pick', 'dropper', 'Pick']];
+  // the seal: current district (or place), its colour, and how full it is against the ideal population
+  let seal;
+  if (coi) { const c = p.cois && p.cois[app.coi]; seal = h('button', { class: 'seal', style: { '--c': hex(COI_COLORS[(app.coi || 0) % COI_COLORS.length]), '--f': '1turn' }, onclick: () => setSheet('half'), 'aria-label': 'Current place' }, h('b', null, c ? c.name.slice(0, 2) : '—')); }
+  else {
+    const d = st && st.districts[app.district], fill = d && st.ideal ? clamp(d.pop / st.ideal, 0, 1.5) : 0;
+    seal = h('button', { class: 'seal' + (d && Math.abs(d.dev) > 0.05 && d.units ? ' off' : ''), style: { '--c': hex(p.colors[app.district]), '--f': Math.min(1, fill) + 'turn' }, 'aria-label': `District ${app.district + 1}, tap to choose another`, onclick: () => openDistrictPicker(p) },
+      h('b', null, app.district + 1), h('small', null, d && d.units ? (d.dev >= 0 ? '+' : '') + (d.dev * 100).toFixed(1) + '%' : 'empty'));
+  }
+  return [h('div', { class: 'toolrow' }, ...tools.map(([t, ic, l]) => toolBtn(t, ic, l, foldSheet))), ...undoBtns(), brushStepper(), seal].filter(Boolean);
+}
+function openDistrictPicker(p) {
+  const st = app.stats, grid = h('div', { class: 'dpick' });
+  for (let d = 0; d < p.n; d++) {
+    const ds = st && st.districts[d];
+    grid.append(h('button', { class: 'dchip' + (d === app.district ? ' on' : '') + (p.locked[d] ? ' locked' : ''), style: { '--c': hex(p.colors[d]) }, onclick: () => { app.district = d; if (app.tool === 'pan' || app.tool === 'pick') app.tool = 'brush'; closeModal(); refreshPanels(); } },
+      h('b', null, d + 1), h('small', { class: ds && Math.abs(ds.dev) > 0.05 && ds.units ? 'bad' : '' }, ds && ds.units ? (ds.dev >= 0 ? '+' : '') + (ds.dev * 100).toFixed(1) + '%' : 'empty')));
+  }
+  openModal('Paint which district?', h('div', null, grid, st ? h('p', { class: 'muted small' }, `Each district should hold about ${fmt(st.ideal)} people. The number under each is how far it is from that.`) : null));
+}
+function simDock() {
+  const W = app.W;
+  return [
+    h('button', { class: 'play' + (app.running ? ' on' : ''), 'aria-label': app.running ? 'Pause' : 'Play', html: app.running ? ICON.pause : ICON.play, onclick: () => { if (app.histOwner) viewHistory(null); setRunning(!app.running); } }),
+    h('div', { class: 'clock' }, h('b', { id: 'dockDate' }, dateLabel()), h('small', null, app.running ? ['', 'Running', 'Running fast', 'Running faster', 'Flat out'][app.speed] : W.month ? 'Paused' : 'Press play to start history')),
+    h('div', { class: 'speeds', role: 'group', 'aria-label': 'Speed' }, [[1, '1×'], [2, '4×'], [3, '12×'], [4, 'Max']].map(([v, l]) => h('button', { class: app.speed === v ? 'on' : '', onclick: () => { app.speed = v; if (!app.running) setRunning(true); else refreshPanels(); } }, l))),
+    h('button', { class: 'tool yr', 'aria-label': 'Advance one year', onclick: () => step(12) }, h('b', null, '+1'), h('small', null, 'year'))];
+}
+function editDock() {
+  const W = app.W, borders = app.editTool === 'borders';
+  const tools = borders ? [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['pick', 'dropper', 'Pick']] : [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint']];
+  const n = W.nations[app.paintNation];
+  const seal = borders ? h('button', { class: 'seal', style: { '--c': n ? hex(n.color) : '#5a5f68', '--f': '1turn' }, 'aria-label': 'Nation being painted', onclick: () => chooseNation('Paint land for…', (id) => { app.paintNation = id; app.paintChosen = true; app.tool = 'brush'; refreshPanels(); }, true, true) }, h('b', null, n ? (n.a3 || n.name).slice(0, 3) : '∅')) : null;
+  return [h('div', { class: 'toolrow' }, ...tools.map(([t, ic, l]) => toolBtn(t, ic, l, foldSheet))), ...undoBtns(), brushStepper(), seal].filter(Boolean);
+}
+
 // ------------------------------------------------------------------ render
 // Small floating legend on the map for maps that colour by value.
 function mapLegend() {
@@ -131,7 +200,7 @@ function mapLegend() {
   el.append(h('div', { class: 'ml-t' }, t.label), c, h('div', { class: 'ml-v' }, h('span', null, L.fmt(L.min)), h('span', null, L.fmt(L.max))));
 }
 export function refreshPanels() {
-  mapLegend();
+  renderDock(); mapLegend();
   $('#date').textContent = app.mode === 'draw' && plan() ? plan().name : dateLabel();
   const t = theme(); $('#themeBtn').innerHTML = ''; $('#themeBtn').append(h('span', { class: 'swatch ' + (t.kind === 'cat' ? 'cat' : '') , style: { background: swatchBg(t) } }), h('span', { class: 'tl' }, t.label), h('span', { class: 'caret' }, '▾'));
   const body = $('#sheetBody'); const scroll = body.scrollTop; body.innerHTML = '';
@@ -145,7 +214,7 @@ export function refreshPanels() {
 function swatchBg(t) { const r = RAMPS[t.ramp || 'viridis']; return t.kind === 'cat' ? 'conic-gradient(#e0607e 0 25%,#ecba40 0 50%,#26a096 0 75%,#6a8fd8 0)' : `linear-gradient(90deg, ${r.join(',')})`; }
 
 export function onTick() {
-  $('#date').textContent = dateLabel();
+  $('#date').textContent = dateLabel(); const dd = $('#dockDate'); if (dd) dd.textContent = dateLabel();
   if (app.mode === 'sim') {
     const yr = Math.floor(app.W.month / 12);
     if (yr !== app._shownYear && !document.activeElement?.matches('input,select,textarea')) { app._shownYear = yr; refreshPanels(); return; }
@@ -185,11 +254,11 @@ function quickThemes(ids) {
 }
 
 // ------------------------------------------------------------------ explore
-export function mapStyleSection() {
-  const st = app.settings, online = st.basemap !== 'none';
+export function mapStyleSection(redraw) {
+  const st = app.settings, online = st.basemap !== 'none'; const again = () => { refreshPanels(); if (redraw) redraw(); };
   const out = h('b', null, Math.round(st.opacity * 100) + '%');
   return section('Base map',
-    h('div', { class: 'chips' }, Object.entries(BASEMAPS).map(([k, b]) => h('button', { class: 'chip-s' + (st.basemap === k ? ' on' : ''), onclick: () => { st.basemap = k; app.basemapOffline = false; saveSettings(); applyMapStyle(); refreshPanels(); } }, b.label))),
+    h('div', { class: 'chips' }, Object.entries(BASEMAPS).map(([k, b]) => h('button', { class: 'chip-s' + (st.basemap === k ? ' on' : ''), onclick: () => { st.basemap = k; app.basemapOffline = false; saveSettings(); applyMapStyle(); again(); } }, b.label))),
     online && !app.basemapOffline ? h('label', { class: 'slider' }, 'Overlay', h('input', { type: 'range', min: 0, max: 1, step: 0.02, value: st.opacity, oninput: (e) => { st.opacity = +e.target.value; out.textContent = Math.round(st.opacity * 100) + '%'; app.R.opts.opacity = st.opacity; app.R.dirty(); }, onchange: saveSettings }), out) : null,
     online && BASEMAPS[st.basemap].labels ? toggle('Place names on top', st.mapLabels, (v) => { st.mapLabels = v; saveSettings(); applyMapStyle(); }) : null,
     app.basemapOffline && st.basemap !== 'none' ? h('div', { class: 'offline' }, 'Offline — showing the built-in map. ', h('button', { class: 'linkbtn', onclick: () => { app.basemapOffline = false; applyMapStyle(); refreshPanels(); } }, 'Try again')) : online ? h('div', { class: 'muted small' }, 'Online map. Every area you look at is saved on your phone, so it still shows without internet.') : h('div', { class: 'muted small' }, 'Built-in map: works fully offline, with roads, railways, rivers and towns as you zoom in.'),
@@ -201,7 +270,7 @@ function tileCacheRow() {
   let info = tileInfoMemo && Date.now() - tileInfoMemo.t < 30000 ? tileInfoMemo.v : null;
   if (!info) { try { info = JSON.parse(B.tileCacheInfo()); tileInfoMemo = { t: Date.now(), v: info }; } catch { return null; } }
   const el = h('div', { class: 'kv small' }, h('span', null, `Saved for offline: ${info.files.toLocaleString()} map tiles · ${(info.bytes / 1048576).toFixed(0)} MB`),
-    h('button', { class: 'linkbtn', onclick: () => { B.clearTileCache(); tileInfoMemo = null; toast('Saved map tiles cleared'); refreshPanels(); } }, 'Clear'));
+    h('button', { class: 'linkbtn', onclick: () => { B.clearTileCache(); tileInfoMemo = null; toast('Saved map tiles cleared'); el.replaceWith(tileCacheRow() || h('span')); } }, 'Clear'));
   return el;
 }
 function welcomeCard() {
@@ -229,30 +298,35 @@ function levelSection() {
 function levelStatusHook(t) { const e = document.getElementById('levelStatus'); if (e && LV.level) e.textContent = `${(coverage || [])[LV.level] || 0} countries have level ${LV.level}. ${t || ''}`; }
 function renderExplore(b) {
   const wc = welcomeCard(); if (wc) b.append(wc);
+  b.append(section(null, legendEl()));
   b.append(levelSection());
   if (LV.level) {
-    b.append(section(null, legendEl()));
     b.append(section('Colour areas by', quickThemes(levelThemesNow().map((t) => [t.id, t.label]))));
-    b.append(mapStyleSection());
     return;
   }
-  b.append(section(null, legendEl()));
   b.append(section('Quick maps', quickThemes([['nations', 'Nations'], ['density', 'Density'], ['dev', 'Development'], ['lean', 'Politics'], ['terrain', 'Terrain'], ['c_country', 'Real countries'], ['c_gdppc', 'Wealth'], ['p_name', 'Provinces'], ['k_pop', 'US counties'], ['climate', 'Climate']]),
-    btn(`Browse all ${app.catalog.length.toLocaleString()} maps…`, openThemeBrowser, 'wide primary'),
-    btn('🗳 US precinct maps (real election results)…', openPrecinctPicker, 'wide')));
-  b.append(mapStyleSection());
-  b.append(section('Show', h('div', { class: 'tog-row' },
-    toggle('Real borders', app.show.borders, (v) => { app.show.borders = v; refresh(); }),
-    toggle('Cities', app.show.cities, (v) => { app.show.cities = v; applyMapStyle(); }),
-    toggle('Roads & rivers', app.show.roads !== false, (v) => { app.show.roads = v; applyMapStyle(); }),
-    toggle('Labels', app.show.labels, (v) => { app.show.labels = v; app.R.dirty(); }),
-    toggle('Cell grid', app.show.grid, (v) => { app.show.grid = v; refresh(); }))));
+    h('div', { class: 'btns' }, btn(`All ${app.catalog.length.toLocaleString()} maps`, openThemeBrowser, 'primary'), btn('US election results', openPrecinctPicker), btn('Base map & layers', openLayers))));
   const W = app.W;
-  b.append(h('p', { class: 'muted small' }, `${W.land.length.toLocaleString()} land cells · ${W.D.units.provinces.length.toLocaleString()} provinces · ${W.D.units.counties.length.toLocaleString()} US counties · ${W.D.units.cities.length.toLocaleString()} cities. Tap anything for details; pinch to zoom.`));
+  b.append(h('p', { class: 'muted small' }, `${W.land.length.toLocaleString()} land cells, ${W.D.units.provinces.length.toLocaleString()} provinces, ${W.D.units.counties.length.toLocaleString()} US counties and ${W.D.units.cities.length.toLocaleString()} cities. Tap anything for details.`));
+}
+// Base map, overlays and what is drawn on top — one panel from the layers button.
+export function openLayers() {
+  const body = h('div', null);
+  const draw = () => {
+    body.innerHTML = '';
+    body.append(mapStyleSection(() => draw()));
+    body.append(section('On the map', h('div', { class: 'tog-row col' },
+      toggle('Real borders', app.show.borders, (v) => { app.show.borders = v; refresh(); }),
+      toggle('Cities', app.show.cities, (v) => { app.show.cities = v; applyMapStyle(); }),
+      toggle('Labels', app.show.labels, (v) => { app.show.labels = v; app.R.dirty(); }),
+      toggle('Roads, railways and rivers (built-in map)', app.show.roads !== false, (v) => { app.show.roads = v; applyMapStyle(); }),
+      toggle('Cell grid when zoomed in', app.show.grid, (v) => { app.show.grid = v; refresh(); }))));
+  };
+  draw(); openModal('Map layers', body);
 }
 
 // ------------------------------------------------------------------ info card
-export function showInfo() { infoOpen = true; refreshPanels(); $('#sheet').classList.remove('collapsed'); $('#sheetBody').scrollTop = 0; }
+export function showInfo() { infoOpen = true; if (app.sheet === 'peek') setSheet('half'); refreshPanels(); $('#sheetBody').scrollTop = 0; }
 export function hideInfo() { infoOpen = false; select(null); }
 function spark(values, color, w = 140, hgt = 34) {
   const c = h('canvas', { width: w * 2, height: hgt * 2, class: 'spark', style: { width: w + 'px', height: hgt + 'px' } });
@@ -473,10 +547,6 @@ export function openStartGame() {
 }
 function renderSim(b) {
   const W = app.W;
-  b.append(h('div', { class: 'simbar' },
-    h('button', { class: 'play' + (app.running ? ' on' : ''), 'aria-label': app.running ? 'Pause' : 'Play', onclick: () => { if (app.histOwner) viewHistory(null); setRunning(!app.running); } }, app.running ? '❚❚' : '▶'),
-    seg([[1, '1×'], [2, '4×'], [3, '12×'], [4, 'Max']], app.speed, (v) => { app.speed = v; if (!app.running) setRunning(true); else refreshPanels(); }),
-    h('button', { class: 'btn', onclick: () => step(12) }, '+1 yr')));
   if (W.game) b.append(gameCard());
   else b.append(btn('👑 Play as a nation…', openStartGame, 'wide'));
   if (app.summary && !app.running) b.append(summaryCard(app.summary));
@@ -527,11 +597,6 @@ function renderDraw(b) {
   if (app.drawTab === 'layers') return renderLayersTab(b, p);
   if (app.drawTab === 'coi') return renderCoiTab(b, p);
   if (app.drawTab === 'eval') return renderEvalTab(b, p, st);
-  const tools = [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['erase', 'eraser', 'Erase'], ['fill', 'bucket', 'Fill'], ['pick', 'dropper', 'Pick']];
-  b.append(h('div', { class: 'tools' }, tools.map(([t, ic, l]) => h('button', { class: app.tool === t ? 'on' : '', onclick: () => { app.tool = t; refreshPanels(); } }, h('span', { class: 'ti', html: ICON[ic] || ic }), h('small', null, l))),
-    h('button', { onclick: () => undoRedo(false), disabled: !app.undo.length }, h('span', { class: 'ti', html: ICON.undo }), h('small', null, 'Undo')),
-    h('button', { onclick: () => undoRedo(true), disabled: !app.redo.length }, h('span', { class: 'ti', html: ICON.redo }), h('small', null, 'Redo'))));
-  if (['brush', 'erase'].includes(app.tool)) b.append(brushSlider());
   const O = app.drawOpts;
   b.append(h('div', { class: 'tog-row' },
     toggle(`Paint whole ${parentWord(app.W, p)}`, O.parent, (v) => { O.parent = v; }),
@@ -572,12 +637,6 @@ function districtChips(p, st) {
 function renderCoiTab(b, p) {
   ensureCoi(p); const W = app.W; if (app.coi == null || app.coi >= p.cois.length) app.coi = 0;
   b.append(h('p', { class: 'muted small' }, 'Mark places that belong together — a neighbourhood, a school area, a farming region — then check whether your districts split them.'));
-  if (p.cois.length) {
-    const tools = [['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['erase', 'eraser', 'Erase']];
-    b.append(h('div', { class: 'tools' }, tools.map(([t, ic, l]) => h('button', { class: app.tool === t ? 'on' : '', onclick: () => { app.tool = t; refreshPanels(); } }, h('span', { class: 'ti', html: ICON[ic] }), h('small', null, l))),
-      h('button', { onclick: () => undoRedo(false), disabled: !app.undo.length }, h('span', { class: 'ti', html: ICON.undo }), h('small', null, 'Undo'))));
-    if (['brush', 'erase'].includes(app.tool)) b.append(brushSlider());
-  }
   const rep = coiReport(W, p);
   for (const R of rep) {
     const c = p.cois[R.k], col = COI_COLORS[R.k % COI_COLORS.length];
@@ -730,9 +789,6 @@ const pcol = (st, k) => (st && st.partyColors ? st.partyColors : PARTY_COLORS)[k
 function voteBar(shares, parties, st = app.stats) {
   return h('div', { class: 'votebar' }, shares.map((s, k) => s > 0.001 ? h('i', { style: { width: (s * 100) + '%', background: hex(pcol(st, k)) }, title: parties[k].name || '' }, s > 0.12 ? Math.round(s * 100) + '%' : '') : null));
 }
-function brushSlider() {
-  return h('label', { class: 'slider' }, 'Brush size', h('input', { type: 'range', min: 1, max: 16, value: app.brush, oninput: (e) => { app.brush = +e.target.value; e.target.nextSibling.textContent = app.brush; } }), h('b', null, app.brush));
-}
 function zoomToDistrict(p, d) {
   const W = app.W; let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
   if (p.unit === 'cells') { for (const i of W.land) if (p.assign[i] === d) { const x = i % W.Wd, y = (i / W.Wd) | 0; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); } if (x0 > x1) return; const dd = 360 / W.Wd; app.R.fitBounds(-180 + x0 * dd, 90 - (y1 + 1) * dd, -180 + (x1 + 1) * dd, 90 - y0 * dd); return; }
@@ -769,7 +825,7 @@ function newPlanForm(inModal) {
     const m = curLevel(); if (!m) { admNote.textContent = ''; return; }
     const part = m.byState ? m.parts.find((p) => 'L:' + p.key === st.adm) : null, count = part ? part.count : m.count;
     admNote.textContent = `${count.toLocaleString()} areas · ${m.source}` + (count > 60000 ? ' — too many to draw on a phone; pick a higher level' : '');
-    st.name = `${part ? part.title : m.title} ${m.levelName} plan`; nameIn.value = st.name;
+    if (st.unit === 'admin') { st.name = `${part ? part.title : m.title} ${m.levelName} plan`; nameIn.value = st.name; }
   };
   const fillParts = () => {
     const m = curLevel(); admPart.innerHTML = '';
@@ -789,7 +845,7 @@ function newPlanForm(inModal) {
   const status = h('div', { class: 'muted small' });
   const f = h('div', { class: 'form' },
     !inModal ? h('div', { class: 'hero' }, h('h3', null, 'Draw your own districts'), h('p', { class: 'muted' }, 'Use real US precincts with real election results — like Districtr — or draw districts anywhere on Earth from grid cells, provinces or counties. World plans decide seats when that country votes in the simulation.')) : null,
-    h('label', null, 'Build districts from', (() => { const sel = h('select', { onchange: (e) => { st.unit = e.target.value; pctRows.style.display = st.unit === 'precincts' ? '' : 'none'; admRows.style.display = st.unit === 'admin' ? '' : 'none'; worldRows.style.display = ['precincts', 'counties', 'admin'].includes(st.unit) ? 'none' : ''; } }, [['precincts', UNIT_TYPES.precincts], ['admin', 'Real local areas — any country, levels 1–5'], ['cells', UNIT_TYPES.cells], ['provinces', UNIT_TYPES.provinces], ['counties', UNIT_TYPES.counties]].map(([k, l]) => h('option', { value: k, selected: k === st.unit }, l)));
+    h('label', null, 'Build districts from', (() => { const sel = h('select', { onchange: (e) => { st.unit = e.target.value; pctRows.style.display = st.unit === 'precincts' ? '' : 'none'; admRows.style.display = st.unit === 'admin' ? '' : 'none'; if (st.unit === 'admin') admInfo(); worldRows.style.display = ['precincts', 'counties', 'admin'].includes(st.unit) ? 'none' : ''; } }, [['precincts', UNIT_TYPES.precincts], ['admin', 'Real local areas — any country, levels 1–5'], ['cells', UNIT_TYPES.cells], ['provinces', UNIT_TYPES.provinces], ['counties', UNIT_TYPES.counties]].map(([k, l]) => h('option', { value: k, selected: k === st.unit }, l)));
       if (app.admPreset) setTimeout(() => { sel.value = 'admin'; sel.dispatchEvent(new Event('change')); }, 0); return sel; })()),
     pctRows, admRows, worldRows,
     h('label', null, 'Name', nameIn),
@@ -894,26 +950,17 @@ function renderEdit(b) {
   if (et === 'borders') {
     const n = W.nations[app.paintNation];
     b.append(h('div', { class: 'paintwith' }, h('span', null, 'Paint land for'), h('button', { class: 'btn' + (app.paintChosen ? '' : ' primary'), onclick: () => chooseNation('Paint land for…', (id) => { app.paintNation = id; app.paintChosen = true; app.tool = 'brush'; refreshPanels(); }, true, true) }, !app.paintChosen ? 'Choose a nation' : n ? [dot(n.color), n.name] : [dot([90, 90, 90]), 'Unclaimed (erase)'], ' ▾')));
-    if (app.paintChosen) b.append(editTools([['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint'], ['pick', 'dropper', 'Pick nation']]));
-    if (app.tool === 'brush' && app.paintChosen) b.append(brushSlider());
-    b.append(h('p', { class: 'muted small' }, 'Paint to move borders. Use “Pick nation” then tap the map to paint as that nation.'));
+    b.append(h('p', { class: 'muted small' }, app.paintChosen ? 'Paint on the map to move borders. With Pick, tap a nation to paint as it.' : 'Choose who gets the land, then paint on the map.'));
   } else if (et === 'data') {
     const attrs = [['dev', 'Development'], ['pop', 'Population (multiply)'], ['lean', 'Political lean'], ['terrain', 'Terrain'], ...Object.keys(W.custom).map((k) => [k, k + ' (your layer)'])];
     b.append(h('label', { class: 'field' }, 'Paint', h('select', { onchange: (e) => { app.dataAttr = e.target.value; app.dataValue = defaultValue(app.dataAttr); refreshPanels(); autoTheme(); } }, attrs.map(([v, l]) => h('option', { value: v, selected: v === app.dataAttr }, l)))));
     b.append(valueControl());
-    b.append(editTools([['pan', 'hand', 'Move'], ['brush', 'brush', 'Paint']]));
-    if (app.tool === 'brush') b.append(brushSlider());
     b.append(btn('＋ New data layer', openNewLayer, 'wide'));
   } else if (et === 'disaster') {
     b.append(h('div', { class: 'chips' }, Object.entries(DISASTERS).map(([k, d]) => h('button', { class: 'chip-s' + (app.disaster === k ? ' on' : ''), onclick: () => { app.disaster = k; refreshPanels(); } }, d.label))));
     b.append(h('p', { class: 'muted small' }, 'Tap anywhere on the map to unleash it.'));
   } else if (et === 'nations' || et === 'release' || et === 'capital') renderNationEditor(b);
   else if (et === 'diplomacy') renderDiplomacy(b);
-}
-function editTools(list) {
-  return h('div', { class: 'tools' }, list.map(([t, ic, l]) => h('button', { class: app.tool === t ? 'on' : '', onclick: () => { app.tool = t; refreshPanels(); } }, h('span', { class: 'ti', html: ICON[ic] || ic }), h('small', null, l))),
-    h('button', { onclick: () => undoRedo(false), disabled: !app.undo.length }, h('span', { class: 'ti', html: ICON.undo }), h('small', null, 'Undo')),
-    h('button', { onclick: () => undoRedo(true), disabled: !app.redo.length }, h('span', { class: 'ti', html: ICON.redo }), h('small', null, 'Redo')));
 }
 function defaultValue(a) { return a === 'pop' ? 2 : a === 'dev' ? 0.8 : a === 'lean' ? 0 : a === 'terrain' ? 6 : 1; }
 function autoTheme() { const m = { dev: 'dev', pop: 'density', lean: 'lean', terrain: 'terrain' }; setTheme(m[app.dataAttr] || 'cu_' + app.dataAttr); }

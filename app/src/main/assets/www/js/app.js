@@ -452,7 +452,7 @@ function drawLabels(ctx, R) {
   const boxes = [];
   const free = (x, y, w, hh) => { for (const b of boxes) if (x < b[0] + b[2] && x + w > b[0] && y < b[1] + b[3] && y + hh > b[1]) return false; boxes.push([x, y, w, hh]); return true; };
   const label = (text, x, y, size, color, weight = 600, stroke = 'rgba(8,10,16,.75)') => {
-    ctx.font = `${weight} ${size}px system-ui, sans-serif`; const w = ctx.measureText(text).width;
+    ctx.font = `${weight} ${size}px 'Barlow SC', system-ui, sans-serif`; const w = ctx.measureText(text).width;
     if (x + w / 2 < 0 || x - w / 2 > vw || y < -size || y > vh + size) return false;
     if (!free(x - w / 2 - 2, y - size / 2 - 1, w + 4, size + 2)) return false;
     ctx.lineWidth = Math.max(2.5, size / 5); ctx.strokeStyle = stroke; ctx.strokeText(text, x - w / 2, y + size * 0.35);
