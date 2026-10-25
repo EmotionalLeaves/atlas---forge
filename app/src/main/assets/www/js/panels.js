@@ -82,7 +82,7 @@ export function init() {
     if (app.mode !== 'edit') { setMode('edit'); return true; }
     autosave(); return false;
   };
-  setMode('edit'); setFull(true);
+  setMode('edit'); setFull(true); setTimeout(worldView, 350);
 }
 // Full screen: only the map, the tool bar and the hint; everything else is one tap away.
 export function setFull(on) {
@@ -318,6 +318,7 @@ function tileCacheRow() {
 function welcomeCard() {
   let seen = false; try { seen = localStorage.getItem('af_welcome') === '1'; } catch {}
   if (seen) return null;
+  try { localStorage.setItem('af_welcome', '1'); } catch {} // shown once; the menu can bring it back
   const close = () => { try { localStorage.setItem('af_welcome', '1'); } catch {} refreshPanels(); };
   const go = (fn) => () => { close(); fn(); };
   const act = (ic, title, text, fn) => h('button', { class: 'act', onclick: go(fn) }, h('span', { class: 'ic', html: ICON[ic] }), h('span', null, h('b', null, title), h('small', null, text)));
@@ -803,7 +804,8 @@ function renderEvalTab(b, p, st) {
   if (p.unit === 'precincts') b.append(electionPicker(p));
   if (st.raceLabels) {
     const tot = st.districts.reduce((a, d) => a + d.pop, 0) || 1;
-    b.append(section('Demographics (2010 Census)', h('div', { class: 'scrollx' }, h('table', { class: 'tbl' },
+    const PK = p.unit === 'precincts' && planLayer(app.W, p) ? planLayer(app.W, p).pack : null;
+    b.append(section(`Demographics (${PK && PK.kind === 'admin' ? '2020' : PK ? '2010' : ''} census)`.replace('( census)', '(census)'), h('div', { class: 'scrollx' }, h('table', { class: 'tbl' },
       h('tr', null, h('th', null, '#'), ...st.raceLabels.map((l) => h('th', null, l))),
       st.districts.filter((d) => d.units).map((d) => h('tr', null, h('td', null, h('span', { class: 'dot', style: { background: hex(p.colors[d.k]) } }), d.k + 1),
         ...st.raceLabels.map((_, k) => { const v = d.pop ? d.race[k] / d.pop : 0; return h('td', { class: v >= 0.5 && k > 0 ? 'maj' : '' }, pct(v)); })))))));
@@ -1040,14 +1042,13 @@ function renderEdit(b) {
   const W = app.W;
   b.append(seg([['borders', 'Borders'], ['data', 'Data'], ['disaster', 'Disasters'], ['nations', 'Nations'], ['diplomacy', 'Diplomacy']], ['release', 'capital'].includes(app.editTool) ? 'nations' : app.editTool, (v) => {
     app.editTool = v; app.tool = (v === 'borders' && app.paintChosen) || v === 'data' ? 'brush' : 'pan';
-    if (v === 'data') autoTheme(); refreshPanels(); }));
+    if (v === 'data') autoTheme(); else if (['borders', 'nations', 'diplomacy'].includes(v) && !/^(nations|n_)/.test(app.themeId)) setTheme('nations'); refreshPanels(); }));
   const et = app.editTool;
   const ABOUT = { borders: 'Give land to any nation by painting it.', data: 'Paint new values for development, population, politics or terrain.', disaster: 'Pick a disaster, then tap where it strikes.', nations: 'Tap a nation to rename it, recolour it, change its government or split it.', diplomacy: 'Tap a nation, then set how it gets on with others, or start a war.' };
   if (ABOUT[et]) b.append(h('p', { class: 'about' }, ABOUT[et]));
   if (et === 'borders') {
     const n = W.nations[app.paintNation];
     b.append(h('div', { class: 'paintwith' }, h('span', null, 'Paint land for'), h('button', { class: 'btn' + (app.paintChosen ? '' : ' primary'), onclick: () => chooseNation('Paint land for…', (id) => { app.paintNation = id; app.paintChosen = true; app.tool = 'brush'; refreshPanels(); }, true, true) }, !app.paintChosen ? 'Choose a nation' : n ? [dot(n.color), n.name] : [dot([90, 90, 90]), 'Unclaimed (erase)'], ' ▾')));
-    b.append(h('p', { class: 'muted small' }, app.paintChosen ? 'Paint on the map to move borders. With Pick, tap a nation to paint as it.' : 'Choose who gets the land, then paint on the map.'));
   } else if (et === 'data') {
     const attrs = [['dev', 'Development'], ['pop', 'Population (multiply)'], ['lean', 'Political lean'], ['terrain', 'Terrain'], ...Object.keys(W.custom).map((k) => [k, k + ' (your layer)'])];
     b.append(h('label', { class: 'field' }, 'Paint', h('select', { onchange: (e) => { app.dataAttr = e.target.value; app.dataValue = defaultValue(app.dataAttr); refreshPanels(); autoTheme(); } }, attrs.map(([v, l]) => h('option', { value: v, selected: v === app.dataAttr }, l)))));
@@ -1077,7 +1078,7 @@ function renderNationEditor(b) {
     const nn = newNation(W, { name, color: hsl(W.rng() * 360, 0.55, 0.55) }); if (!nn) return toast('Too many nations');
     nn.alive = false; app.paintNation = nn.id; app.editTool = 'borders'; app.tool = 'brush'; rebuildCatalog(); refreshPanels(); toast('Now paint its land on the map');
   }), btn('Release a province', () => { app.editTool = 'release'; refreshPanels(); })));
-  if (!n || !n.alive) { b.append(h('p', { class: 'muted small' }, 'Tap a nation on the map to edit it.')); return; }
+  if (!n || !n.alive) return;
   const colors = [[214, 84, 84], [232, 140, 60], [226, 196, 72], [120, 186, 90], [52, 150, 110], [60, 170, 190], [70, 120, 210], [120, 96, 210], [180, 90, 190], [210, 110, 150], [150, 120, 90], [130, 140, 150]];
   b.append(h('div', { class: 'card' },
     h('label', { class: 'field' }, 'Name', h('input', { value: n.name, onchange: (e) => { n.name = e.target.value || n.name; rebuildCatalog(); app.R.dirty(); refreshPanels(); } })),
@@ -1092,7 +1093,7 @@ function renderNationEditor(b) {
 }
 function renderDiplomacy(b) {
   const W = app.W, s = app.sel, A = s && s.nation ? W.nations[s.nation] : null;
-  if (!A || !A.alive) { b.append(h('p', { class: 'muted small' }, 'Tap a nation on the map, then pick a second one to change how they get along.')); return; }
+  if (!A || !A.alive) return;
   const B = W.nations[app.diploTarget]; const ok = B && B.alive && B.id !== A.id;
   b.append(h('div', { class: 'diplo' }, h('span', null, dot(A.color), A.name), h('span', { class: 'muted' }, '↔'),
     h('button', { class: 'btn', onclick: () => chooseNation('Second nation', (id) => { app.diploTarget = id; refreshPanels(); }) }, ok ? [dot(B.color), B.name] : 'Choose… (or tap map)')));
@@ -1210,10 +1211,10 @@ function openMenu() {
     h('div', { class: 'muted small' }, ago == null ? 'Autosaves while you play.' : `Autosaved ${ago < 1 ? 'just now' : ago + ' min ago'}.`),
     h('label', null, 'World name', h('input', { value: W.name, onchange: (e) => { W.name = e.target.value || W.name; } })),
     h('div', { class: 'btns' },
-      btn('💾 Save', async () => { await putSlot('w_' + Date.now(), serialize(W)); toast('Saved'); openMenu(); }, 'primary'),
-      btn('⬇ Export file', async () => { toast('Packing…'); const b = await exportBlob(W); saveFile((W.name || 'world').replace(/\W+/g, '_') + '.atlas', b); }),
-      btn('⬆ Import file', () => fileIn.click()), fileIn,
-      btn('🌍 New world', () => openNewWorld()),
+      btn('Save', async () => { await putSlot('w_' + Date.now(), serialize(W)); toast('Saved'); openMenu(); }, 'primary'),
+      btn('Export file', async () => { toast('Packing…'); const b = await exportBlob(W); saveFile((W.name || 'world').replace(/\W+/g, '_') + '.atlas', b); }),
+      btn('Import file', () => fileIn.click()), fileIn,
+      btn('New world', () => openNewWorld()),
       btn('Show the start screen', () => { try { localStorage.removeItem('af_welcome'); } catch {} closeModal(); setFull(false); setMode('explore'); setSheet('half'); refreshPanels(); })),
     h('div', { class: 'sec-t' }, 'Saved worlds'), slots,
     h('details', { class: 'sec' }, h('summary', null, 'About & data'), h('p', { class: 'muted small' }, `Atlas Forge — draw districts and run history on a ${W.Wd}×${W.Hd} grid of the real Earth. Borders, provinces, cities, terrain: Natural Earth (public domain). US counties and populations: US Census Bureau. Country population/GDP: Natural Earth (2019–2021 estimates). Cell populations are modelled from those figures.`))));
@@ -1262,7 +1263,7 @@ export function openSearch() {
     res.sort((a, b) => a.score - b.score || kinds[a.kind] - kinds[b.kind] || b.weight - a.weight);
     const per = {}, capK = { Nation: 8, Country: 6, City: 15, Province: 10, County: 6 }, shown = [];
     for (const r of res) { per[r.kind] = (per[r.kind] || 0) + 1; if (per[r.kind] <= capK[r.kind]) shown.push(r); }
-    const extra = Object.entries(per).filter(([k, c]) => c > capK[k]).map(([k, c]) => `+${c - capK[k]} more ${k.toLowerCase()}${c - capK[k] > 1 ? 's' : ''}`).join(' · ');
+    const extra = Object.entries(per).filter(([k, c]) => c > capK[k]).map(([k, c]) => `+${c - capK[k]} more ${c - capK[k] > 1 ? k.toLowerCase().replace(/y$/, 'ie') + 's' : k.toLowerCase()}`).join(' · ');
     for (const r of shown) list.append(h('button', { class: 'titem', onclick: () => { closeModal(); r.go(); } },
       r.color ? dot(r.color) : h('span', { class: 'kind k-' + r.kind.toLowerCase() }, { City: 'CITY', Country: 'LAND', Province: 'PROV', County: 'CNTY' }[r.kind] || r.kind[0]), h('span', null, r.name, h('small', { class: 'block' }, r.sub)), h('small', null, r.kind)));
     if (!res.length) list.append(h('p', { class: 'muted' }, 'Nothing found.'));

@@ -158,7 +158,7 @@ function polyLayerShown() {
 
 // Recolour everything for the current mode / theme / plan.
 export function refresh() {
-  const W = app.W;
+  const W = app.W; if (REF.H && REF.up.size) scheduleRef(app);
   if (!app.histOwner) return refreshInner();
   const real = W.owner; W.owner = app.histOwner;
   try { refreshInner(); } finally { W.owner = real; }

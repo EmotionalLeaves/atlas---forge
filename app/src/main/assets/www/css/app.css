@@ -376,3 +376,17 @@ body.full #floating { top: calc(10px + env(safe-area-inset-top)); }
 body.full #hint { top: calc(12px + env(safe-area-inset-top)); max-width: calc(100% - 84px); left: calc(50% - 24px); }
 body.full #dock { bottom: calc(14px + env(safe-area-inset-bottom)) !important; }
 #fsBtn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* toggles inside forms keep their switch layout */
+.form label.tog, label.tog { display: inline-flex; align-items: center; gap: 8px; margin: 6px 0; color: var(--text); }
+.tog-row.col label.tog { display: flex; }
+/* dock: compact tools, the district circle on the right */
+#dock .toolrow { flex: 1 1 auto; justify-content: flex-start; }
+#dock .tool { flex: 0 0 52px; }
+@media (max-width: 400px) {
+  #dock { gap: 5px; padding: 5px; }
+  #dock .tool { flex: 0 0 38px; padding: 4px 0; }
+  #dock .tool small { font-size: 10px; }
+  #dock .ti svg { width: 20px; height: 20px; }
+  .seal { width: 46px; height: 46px; } .seal::before { inset: 7px; } .seal b { font-size: 15px; } .seal small { font-size: 9px; }
+  .undo2 button { width: 32px; } .stepper button { width: 30px; }
+}

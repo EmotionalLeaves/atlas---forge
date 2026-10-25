@@ -48,6 +48,9 @@ export async function updateRef(app) {
   const want = new Set(wantedLayers(app));
   for (const i of [...REF.up]) if (!want.has(i)) { drop(R, i); REF.up.delete(i); }
   for (const i of want) if (!REF.up.has(i)) { upload(app, i); REF.up.add(i); }
+  // quieter under district plans so the districts stay readable
+  const fade = app.mode === 'draw' ? 0.38 : 1;
+  for (const i of REF.up) { const T = R.thick['ref' + i]; if (T && T.base) T.color[3] = T.base[3] * fade; const Pl = R.polys['ref' + i]; if (Pl) Pl.alpha = fade; }
   R.dirty();
 }
 function drop(R, i) { const L = REF.H.layers[i]; if (L.kind === 'poly') R.removePolyLayer('ref' + i); else R.setThickLines('ref' + i, null); }
@@ -63,6 +66,6 @@ function upload(app, i) {
   const P = L.posA, S0 = L.startA, lpos = new Float32Array(L.segs * 4); let o = 0;
   for (let k = 0; k + 1 < S0.length; k++) for (let v = S0[k]; v + 1 < S0[k + 1]; v++) { lpos[o++] = P[v * 2]; lpos[o++] = P[v * 2 + 1]; lpos[o++] = P[v * 2 + 2]; lpos[o++] = P[v * 2 + 3]; }
   const st = ST[L.cls] || ST.road;
-  R.setThickLines('ref' + i, lpos, st.c, (s) => st.w(Math.log2(s / 256)), -10 + st.o);
+  R.setThickLines('ref' + i, lpos, st.c.slice(), (s) => st.w(Math.log2(s / 256)), -10 + st.o); R.thick['ref' + i].base = st.c;
 }
 export function setRefOn(app, on) { REF.on = on; updateRef(app); }

@@ -80,7 +80,7 @@ export function scheduleLevelUpdate(app) { clearTimeout(timer); timer = setTimeo
 export async function setLevel(app, level) {
   LV.level = level; await levelsAvailable();
   for (const k of [...LV.loaded.keys()]) dropPack(app, k);
-  if (!level) { app.R.polyOrder = app.R.polyOrder.filter((k) => !k.startsWith('lv:')); app.R.opts.hideBase = false; return; }
+  if (!level) { LV.note = ''; app.R.polyOrder = app.R.polyOrder.filter((k) => !k.startsWith('lv:')); app.R.opts.hideBase = false; return; }
   if (!app.themeId.startsWith('lv_')) app.themeId = 'lv_name';
   updateLevels(app);
 }
