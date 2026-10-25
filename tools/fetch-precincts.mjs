@@ -16,7 +16,7 @@ const OUT = process.argv[2], TMP = process.argv[3] || path.join(OUT, '..', 'prec
 fs.mkdirSync(OUT, { recursive: true }); fs.mkdirSync(TMP, { recursive: true });
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const AB = { AL: '01', AK: '02', AZ: '04', AR: '05', CA: '06', CO: '08', CT: '09', DE: '10', DC: '11', FL: '12', GA: '13', HI: '15', ID: '16', IL: '17', IN: '18', IA: '19', KS: '20', KY: '21', LA: '22', ME: '23', MD: '24', MA: '25', MI: '26', MN: '27', MS: '28', MO: '29', MT: '30', NE: '31', NV: '32', NH: '33', NJ: '34', NM: '35', NY: '36', NC: '37', ND: '38', OH: '39', OK: '40', OR: '41', PA: '42', RI: '44', SC: '45', SD: '46', TN: '47', TX: '48', UT: '49', VT: '50', VA: '51', WA: '53', WV: '54', WI: '55', WY: '56' };
-const OFFICE = { PRE: 'President', USS: 'US Senate', USH: 'US House', GOV: 'Governor', LTG: 'Lieutenant Governor', ATG: 'Attorney General', SOS: 'Secretary of State', TRE: 'Treasurer', AUD: 'Auditor', CON: 'Controller', COM: 'Comptroller', AGR: 'Agriculture Commissioner', INS: 'Insurance Commissioner', LAB: 'Labor Commissioner', SPI: 'Superintendent of Schools', LND: 'Land Commissioner', RRC: 'Railroad Commissioner', PSC: 'Public Service Commission', SSC: 'State Supreme Court', SCC: 'Corporation Commission', CFO: 'Chief Financial Officer', MNI: 'Mine Inspector', SBE: 'Board of Education', REG: 'University Regents', SAC: 'Supreme Court', SPR: 'Supreme Court', TAX: 'Tax Commissioner', CPA: 'Comptroller', PUC: 'Public Utilities Commission', HOU: 'US House' };
+const OFFICE = { PRE: 'President', USS: 'US Senate', USH: 'US House', HAL: 'US House (at-large)', COU: 'City Council', UBR: 'University Regents', SBE: 'Board of Education', GOV: 'Governor', LTG: 'Lieutenant Governor', ATG: 'Attorney General', SOS: 'Secretary of State', TRE: 'Treasurer', AUD: 'Auditor', CON: 'Controller', COM: 'Comptroller', AGR: 'Agriculture Commissioner', INS: 'Insurance Commissioner', LAB: 'Labor Commissioner', SPI: 'Superintendent of Schools', LND: 'Land Commissioner', RRC: 'Railroad Commissioner', PSC: 'Public Service Commission', SSC: 'State Supreme Court', SCC: 'Corporation Commission', CFO: 'Chief Financial Officer', MNI: 'Mine Inspector', SBE: 'Board of Education', REG: 'University Regents', SAC: 'Supreme Court', SPR: 'Supreme Court', TAX: 'Tax Commissioner', CPA: 'Comptroller', PUC: 'Public Utilities Commission', HOU: 'US House' };
 const UA = { 'User-Agent': 'AtlasForge-build (github.com/EmotionalLeaves/atlas---forge)' };
 
 async function getJSON(url) { for (let k = 0; k < 4; k++) { try { const r = await fetch(url, { headers: UA }); if (r.ok) return await r.json(); log('HTTP', r.status, url); } catch (e) { log('ERR', e.message, url); } await new Promise((s) => setTimeout(s, 3000 * (k + 1))); } return null; }
@@ -75,8 +75,9 @@ async function vest() {
   for (const item of listing.data) {
     if (item.type !== 'dataset') continue;
     const pid = `${item.protocol}:${item.authority}/${item.identifier}`;
-    const ds = await getJSON(`https://dataverse.harvard.edu/api/datasets/:persistentId/?persistentId=${pid}`); if (!ds || !ds.data) continue;
-    const V = ds.data.latestVersion, tf = V.metadataBlocks.citation.fields.find((f) => f.typeName === 'title'), title = tf ? tf.value : '';
+    const ds = await getJSON(`https://dataverse.harvard.edu/api/datasets/:persistentId/?persistentId=${pid}`); if (!ds || !ds.data || !ds.data.latestVersion) { log('VEST: no details for', pid); continue; }
+    const V = ds.data.latestVersion, fields = (V.metadataBlocks && V.metadataBlocks.citation && V.metadataBlocks.citation.fields) || [], tf = fields.find((f) => f.typeName === 'title'), title = tf ? String(tf.value) : '';
+    if (!V.files) continue;
     const m = /^(\d{4}) Precinct-Level Election Results$/i.exec(title.trim()); if (!m || +m[1] < 2016) { log('VEST skip:', title); continue; }
     const year = +m[1]; log('VEST', title, V.files.length, 'files');
     for (const f of V.files) {
@@ -121,7 +122,7 @@ async function nyt2024() {
   }
 }
 
-await vest();
-await nyt2024();
+try { await vest(); } catch (e) { log('VEST stopped:', e.message); } // keep what was fetched
+try { await nyt2024(); } catch (e) { log('NYT stopped:', e.message); }
 let n = 0; for (const d of fs.readdirSync(OUT)) n += fs.readdirSync(path.join(OUT, d)).length;
 log('precinct result files:', n);
