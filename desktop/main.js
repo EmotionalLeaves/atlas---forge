@@ -7,6 +7,8 @@ const { pathToFileURL } = require('url');
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }]);
 const WWW = app.isPackaged ? path.join(process.resourcesPath, 'www') : path.join(__dirname, '..', 'app', 'src', 'main', 'assets', 'www');
 
+// computers without a working graphics driver still get the map (software WebGL; the content is our own)
+app.commandLine.appendSwitch('enable-unsafe-swiftshader');
 if (!app.requestSingleInstanceLock()) app.quit();
 let win = null;
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
