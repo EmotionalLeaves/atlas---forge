@@ -1,6 +1,8 @@
 name: Precinct debug
 on:
   workflow_dispatch:
+  push:
+    branches: [precdebug]
 permissions:
   contents: write
 jobs:
