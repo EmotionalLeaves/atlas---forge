@@ -240,6 +240,7 @@ function applyOverlay(land, N) {
   if (t.layer === 'cells') {
     const buf = app.ovRGBA || (app.ovRGBA = new Uint8Array(app.cellRGBA.length)); buf.fill(0);
     app.overlayLegend = colorize(t, land, N, t.value, buf);
+    const F = app.fringe; if (F) for (let k = 0; k < F.cell.length; k++) { const a = F.src[k] * 4, b = F.cell[k] * 4; buf[b] = buf[a]; buf[b + 1] = buf[a + 1]; buf[b + 2] = buf[a + 2]; buf[b + 3] = buf[a + 3]; } // no gaps along coasts
     app.R.setOverlay(buf, O.alpha);
   } else {
     app.R.setOverlay(null);
@@ -461,6 +462,9 @@ export function refreshCells(list) {
   let y0 = Infinity, y1 = -1; for (const i of list) { const y = (i / app.W.Wd) | 0; if (y < y0) y0 = y; if (y > y1) y1 = y; }
   if (y1 < 0) return;
   app.R.setCellRows(app.cellRGBA, app.groupRGBA, Math.max(0, y0 - 1), Math.min(app.W.Hd - 1, y1 + 1));
+  // a map laid on top follows the brush too (painting the very data it shows must show at once)
+  const OL = app.overlayLegend;
+  if (app.mode === 'edit' && app.R.overlay && app.ovRGBA && OL && OL.colorOne) { for (const i of list) OL.colorOne(i, app.ovRGBA); app.R.setOverlayRows(app.ovRGBA, y0, y1); }
 }
 
 // ---------------------------------------------------------------- cities & labels

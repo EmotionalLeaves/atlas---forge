@@ -151,6 +151,14 @@ export class MapRenderer {
     if (!this._same('ovC', rgba)) { const gl = this.gl; gl.bindTexture(gl.TEXTURE_2D, this.texOverlay); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gw, this.gh, gl.RGBA, gl.UNSIGNED_BYTE, rgba); }
     this.overlay = { alpha }; this.dirty();
   }
+  // repaint only rows y0..y1 of the overlay (live while painting)
+  setOverlayRows(rgba, y0, y1) {
+    if (!this.texOverlay || !this.overlay) return;
+    const gl = this.gl, w = this.gw, a = y0 * w * 4, b = (y1 + 1) * w * 4;
+    gl.bindTexture(gl.TEXTURE_2D, this.texOverlay); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, y0, w, y1 - y0 + 1, gl.RGBA, gl.UNSIGNED_BYTE, rgba.subarray(a, b));
+    if (this._up && this._up.ovC) this._up.ovC.set(rgba.subarray(a, b), a);
+    this.dirty();
+  }
   setCellGroups(rgba) { if (this._same('cellG', rgba)) return; const gl = this.gl; gl.bindTexture(gl.TEXTURE_2D, this.texGroup); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gw, this.gh, gl.RGBA, gl.UNSIGNED_BYTE, rgba); this.dirty(); }
 
   // geom: {pos Float32Array, uid Uint16Array, idx Uint32Array, lpos Float32Array, luid Uint16Array}
